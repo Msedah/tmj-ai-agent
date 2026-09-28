@@ -25,7 +25,7 @@ exports.handler=async(event)=>{
  const message=String(body.message||"").trim();if(!message||message.length>8000)return json(400,{error:"Please provide an academic question under 8000 characters."});
 
  const emb=await openaiEmbed(message);if(!emb.ok)return json(emb.status,{error:emb.error});
- const {data:chunks,error:chunkError}=await supabase.rpc("match_document_chunks",{query_embedding:emb.embedding,match_user_id:userData.user.id,match_count:8});
+ const {data:chunks,error:chunkError}=await supabase.rpc("match_document_chunks",{query_embedding:emb.embedding,match_count:8});
  if(chunkError)return json(500,{error:"Knowledge search failed. Check the Supabase vector function."});
  const selected=(chunks||[]).filter(x=>x.similarity>=0.25);
  const context=selected.map((x,i)=>"[Source "+(i+1)+": "+x.source_name+(x.module_code?" | Module "+x.module_code:"")+(x.source_url?" | "+x.source_url:"")+"]\n"+x.content).join("\n\n");
