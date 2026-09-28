@@ -14,7 +14,7 @@ exports.handler=async(event)=>{
  if(!type.includes("text/html")&&!type.includes("text/plain"))return json(415,{error:"Only public HTML or text pages can be ingested by this endpoint."});
  let raw=await response.text();let text=raw;
  if(type.includes("text/html"))text=raw.replace(/<script[\\s\\S]*?<\\/script>/gi," ").replace(/<style[\\s\\S]*?<\\/style>/gi," ").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;/gi,"'");
- text=text.replace(/\\s+/g," ").trim();if(text.length<100)return json(422,{error:"The page did not contain enough readable text."});
+ text=text.replace(/\s+/g," ").trim();if(text.length<100)return json(422,{error:"The page did not contain enough readable text."});
  const chunks=chunkText(text,1800,250);if(chunks.length>300)return json(413,{error:"Source is too large; split the source or ingest a specific page."});
  const admin=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY);
  const storagePath="nwu-official:"+url;
