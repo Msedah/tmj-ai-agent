@@ -1,0 +1,11 @@
+{
+  "name":"tmj-ai-agent",
+  "version":"1.0.0",
+  "private":true,
+  "description":"Education-only NWU student AI assistant.",
+  "dependencies":{
+    "@supabase/supabase-js":"^2.57.4",
+    "mammoth":"^1.9.1",
+    "pdf-parse":"^1.1.1"
+  }
+}
