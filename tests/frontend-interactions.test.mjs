@@ -5,6 +5,12 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
+test("Supabase client uses the standard project API hostname", () => {
+  const match = source.match(/supabaseUrl:\s*"([^"]+)"/);
+  assert.ok(match, "Supabase project URL should be configured");
+  assert.match(new URL(match[1]).hostname, /^[a-z0-9-]+\.supabase\.co$/);
+});
+
 class ElementMock {
   constructor(id) {
     this.id = id;

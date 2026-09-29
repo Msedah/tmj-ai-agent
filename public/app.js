@@ -1,5 +1,5 @@
 const CONFIG = {
-  supabaseUrl: "https://kiaaamxjtvenyaujpysf.supabaseClient.co",
+  supabaseUrl: "https://kiaaamxjtvenyaujpysf.supabase.co",
   supabaseAnonKey: "sb_publishable_F3MdZEjCS99N9oY9z7m9PQ_lwY0FUTr"
 };
 
