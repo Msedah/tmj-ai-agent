@@ -1,8 +1,18 @@
 {
-  "name":"tmj-ai-agent",
-  "version":"1.0.0",
-  "private":true,
-  "description":"Education-only NWU student AI assistant.",
-  "scripts":{"check":"node --check netlify/functions/chat.js && node --check netlify/functions/index-document.js && node --check netlify/functions/index-nwu.js"},
-  "dependencies":{"@supabase/supabase-js":"^2.57.4","mammoth":"^1.9.1","pdf-parse":"^1.1.1"}
+  "name": "tmj-ai-agent",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Education-only NWU student AI assistant.",
+  "scripts": {
+    "check": "node --check src/index.js",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "mammoth": "^1.9.1",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.68.0"
+  }
 }
