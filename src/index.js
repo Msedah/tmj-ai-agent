@@ -166,7 +166,7 @@ async function handleNwuIndex(request, env) {
   if (!type.includes("text/html") && !type.includes("text/plain")) return json(415, { error: "Only public HTML or text pages can be ingested." });
 
   let text = await response.text();
-  if (type.includes("text/html")) text = text.replace(/<script[\\s\\S]*?<\\/script>/gi, " ").replace(/<style[\\s\\S]*?<\\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
+  if (type.includes("text/html")) text = text.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
   text = text.replace(/\\s+/g, " ").trim();
   if (text.length < 100) return json(422, { error: "The page did not contain enough readable text." });
 
