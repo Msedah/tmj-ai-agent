@@ -34,20 +34,37 @@ function showAuthDialog(message = "") {
   $("authEmail")?.focus();
 }
 
+const sidebarToggle = $("sidebarToggle");
+const sidebarOverlay = $("sidebarOverlay");
+
+function setSidebarOpen(open) {
+  document.body?.classList?.toggle("sidebar-open", open);
+  sidebarToggle?.setAttribute("aria-expanded", String(open));
+  if (sidebarOverlay) sidebarOverlay.hidden = !open;
+}
+
+sidebarToggle?.addEventListener("click", () => {
+  setSidebarOpen(sidebarToggle.getAttribute("aria-expanded") !== "true");
+});
+sidebarOverlay?.addEventListener("click", () => setSidebarOpen(false));
+$("aboutLink")?.addEventListener("click", () => setSidebarOpen(false));
+
 function updateAuthUI() {
   authButton.textContent = session ? "Sign out" : "Sign in";
   authButton.setAttribute("aria-label", session ? "Sign out of your account" : "Sign in to your account");
   // Starting a new local draft is useful even before sign-in; saving it still requires an account.
   $("newChat").disabled = false;
+  $("historyPanel").hidden = !session;
+  $("developerAttribution").hidden = !session;
   $("uploadPanel").hidden = !session;
 
   if (!session) {
-    $("conversationList").innerHTML = '<p class="muted">Sign in to save and view conversations.</p>';
+    $("conversationList").replaceChildren();
   }
 }
 
 function renderWelcome() {
-  $("messages").innerHTML = '<div class="welcome"><p class="eyebrow">TMJ AI AGENT</p><h2>What are you studying?</h2><p>Try: “Explain my PADM module concept in simple English” or upload your module material.</p></div>';
+  $("messages").innerHTML = '<div class="welcome"><div class="welcome-mark" aria-hidden="true">T</div><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question, get a clear explanation, or sign in to upload your course material.</p><p class="example-prompt">Try: “Explain my PADM module concept in simple English.”</p></div>';
 }
 
 function addMessage(role, text) {
@@ -109,6 +126,7 @@ async function ready() {
 }
 
 authButton.addEventListener("click", async () => {
+  setSidebarOpen(false);
   if (!session) {
     showAuthDialog();
     return;
@@ -178,6 +196,7 @@ authForm.addEventListener("submit", async (event) => {
 });
 
 $("newChat").addEventListener("click", () => {
+  setSidebarOpen(false);
   currentConversation = null;
   chatForm.reset();
   renderWelcome();

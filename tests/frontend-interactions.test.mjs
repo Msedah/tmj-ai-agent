@@ -29,6 +29,7 @@ class ElementMock {
   }
 
   setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
   focus() {}
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -37,27 +38,31 @@ class ElementMock {
   querySelector() { return new ElementMock(`${this.id}-submit`); }
 }
 
-test("classic frontend script boots beside the Supabase CDN global and primary clicks respond", async () => {
+test("classic frontend script boots beside Supabase and dashboard controls respond", async () => {
   const ids = [
     "authDialog", "authButton", "authForm", "authSubmit", "authStatus", "authToggle",
     "authClose", "authEmail", "authPassword", "authName", "authNameLabel", "authTitle",
     "chatForm", "chatStatus", "prompt", "messages", "newChat", "uploadForm",
-    "uploadStatus", "uploadPanel", "conversationList", "appStatus", "documentFile", "moduleCode"
+    "uploadStatus", "uploadPanel", "historyPanel", "conversationList", "appStatus", "documentFile", "moduleCode",
+    "developerAttribution", "sidebarToggle", "sidebarOverlay", "aboutLink"
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new ElementMock(id)]));
   elements.chatForm.reset = () => { elements.prompt.value = ""; };
   elements.chatForm.querySelector = () => new ElementMock("chat-submit");
   elements.uploadForm.querySelector = () => new ElementMock("upload-submit");
 
+  let authStateListener;
   const sdk = {
     createClient: () => ({
       auth: {
-        onAuthStateChange() {},
+        onAuthStateChange(listener) { authStateListener = listener; },
         getSession: async () => ({ data: { session: null }, error: null })
       }
     })
   };
+  const bodyClasses = new Set();
   const document = {
+    body: { classList: { toggle: (name, force) => force ? bodyClasses.add(name) : bodyClasses.delete(name) } },
     getElementById: (id) => elements[id] || null,
     createElement: (tag) => new ElementMock(tag)
   };
@@ -66,6 +71,16 @@ test("classic frontend script boots beside the Supabase CDN global and primary c
   // Supabase's UMD script exposes a classic global binding named `supabase`.
   vm.runInContext("var supabase = window.supabase;", context);
   assert.doesNotThrow(() => new vm.Script(source, { filename: "public/app.js" }).runInContext(context));
+  assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden when signed out");
+  assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden when signed out");
+  assert.equal(elements.uploadPanel.hidden, true, "private module uploads should be hidden when signed out");
+
+  elements.sidebarToggle.listeners.get("click")[0]();
+  assert.equal(bodyClasses.has("sidebar-open"), true, "mobile menu should open the sidebar");
+  assert.equal(elements.sidebarOverlay.hidden, false, "opening the mobile sidebar should show its overlay");
+  elements.sidebarOverlay.listeners.get("click")[0]();
+  assert.equal(bodyClasses.has("sidebar-open"), false, "sidebar overlay should close the mobile menu");
+  assert.equal(elements.sidebarOverlay.hidden, true, "closing the mobile menu should hide its overlay");
 
   await elements.authButton.listeners.get("click")[0]();
   assert.equal(elements.authDialog.open, true, "sign-in button should open the auth dialog");
@@ -88,5 +103,25 @@ test("classic frontend script boots beside the Supabase CDN global and primary c
   elements.prompt.value = "draft question";
   elements.newChat.listeners.get("click")[0]();
   assert.equal(elements.prompt.value, "", "new conversation should clear the draft");
-  assert.match(elements.messages.innerHTML, /What are you studying\?/);
+  assert.match(elements.messages.innerHTML, /What are you studying today\?/);
+
+  elements.prompt.value = "Explain a first-year biology concept.";
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(elements.authDialog.open, true, "signed-out chat submit should open the sign-in dialog");
+  assert.match(elements.authStatus.textContent, /Sign in to ask a question/);
+  elements.authClose.listeners.get("click")[0]();
+
+  await elements.uploadForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(elements.authDialog.open, true, "signed-out upload submit should open the sign-in dialog");
+  assert.match(elements.authStatus.textContent, /Sign in to upload/);
+  elements.authClose.listeners.get("click")[0]();
+
+  authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user" } });
+  assert.equal(elements.developerAttribution.hidden, false, "developer attribution should be visible after sign-in");
+  assert.equal(elements.historyPanel.hidden, false, "saved conversation history should be available after sign-in");
+  assert.equal(elements.uploadPanel.hidden, false, "module uploads should be available after sign-in");
+  authStateListener("SIGNED_OUT", null);
+  assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden again after sign-out");
+  assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden again after sign-out");
+  assert.equal(elements.uploadPanel.hidden, true, "module uploads should be hidden again after sign-out");
 });
