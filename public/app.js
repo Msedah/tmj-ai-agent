@@ -72,6 +72,10 @@ $("historyToggle")?.addEventListener("click", () => {
 function updateAuthUI() {
   authButton.textContent = session ? "Sign out" : "Sign in";
   authButton.setAttribute("aria-label", session ? "Sign out of your account" : "Sign in to your account");
+  if (session) {
+    setStatus(authStatus, "", "info");
+    if (authDialog?.open) authDialog.close();
+  }
   const accountIdentity = $("accountIdentity");
   const accountEmail = session?.user?.email || "";
   if (accountIdentity) {
@@ -138,7 +142,9 @@ async function ready() {
   }
 
   try {
-    supabaseClient = window.supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey);
+    supabaseClient = window.supabase.createClient(CONFIG.supabaseUrl, CONFIG.supabaseAnonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
     supabaseClient.auth.onAuthStateChange((_event, nextSession) => {
       session = nextSession;
       updateAuthUI();
@@ -150,10 +156,10 @@ async function ready() {
     updateAuthUI();
     if (session) await loadConversations();
     setStatus($("appStatus"), "", "success");
-  } catch {
+  } catch (error) {
     session = null;
     updateAuthUI();
-    const message = "Could not connect to account services. Please try again shortly.";
+    const message = error?.message || "Could not connect to account services. Please try again shortly.";
     setStatus($("appStatus"), message);
     setStatus(authStatus, message);
   }

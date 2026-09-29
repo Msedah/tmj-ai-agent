@@ -60,21 +60,25 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
 
   let authStateListener;
   const authCalls = [];
+  let clientOptions;
   const sdk = {
-    createClient: () => ({
-      auth: {
-        onAuthStateChange(listener) { authStateListener = listener; },
-        getSession: async () => ({ data: { session: null }, error: null }),
-        async signUp(credentials) {
-          authCalls.push({ method: "signUp", credentials });
-          return { data: { session: { access_token: "signup-token", user: { id: "new-user", email: credentials.email } } }, error: null };
-        },
-        async signInWithPassword(credentials) {
-          authCalls.push({ method: "signInWithPassword", credentials });
-          return { data: { session: { access_token: "signin-token", user: { id: "new-user", email: credentials.email } } }, error: null };
+    createClient: (_url, _key, options) => {
+      clientOptions = options;
+      return {
+        auth: {
+          onAuthStateChange(listener) { authStateListener = listener; },
+          getSession: async () => ({ data: { session: null }, error: null }),
+          async signUp(credentials) {
+            authCalls.push({ method: "signUp", credentials });
+            return { data: { session: { access_token: "signup-token", user: { id: "new-user", email: credentials.email } } }, error: null };
+          },
+          async signInWithPassword(credentials) {
+            authCalls.push({ method: "signInWithPassword", credentials });
+            return { data: { session: { access_token: "signin-token", user: { id: "new-user", email: credentials.email } } }, error: null };
+          }
         }
-      }
-    })
+      };
+    }
   };
   const bodyClasses = new Set();
   const document = {
@@ -87,6 +91,9 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   // Supabase's UMD script exposes a classic global binding named `supabase`.
   vm.runInContext("var supabase = window.supabase;", context);
   assert.doesNotThrow(() => new vm.Script(source, { filename: "public/app.js" }).runInContext(context));
+  assert.equal(clientOptions.auth.persistSession, true, "Supabase should persist signed-in sessions");
+  assert.equal(clientOptions.auth.autoRefreshToken, true, "Supabase should refresh session tokens");
+  assert.equal(clientOptions.auth.detectSessionInUrl, true, "Supabase should handle auth callback URLs");
   assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden when signed out");
   assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden when signed out");
   assert.equal(elements.historyToggle.hidden, true, "history visibility control should be private when signed out");
@@ -149,8 +156,10 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.match(elements.authStatus.textContent, /Sign in to upload/);
   elements.authClose.listeners.get("click")[0]();
 
+  elements.authDialog.open = true;
   authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user", email: "averyveryverylongemailaddress@example.com" } });
   await Promise.resolve();
+  assert.equal(elements.authDialog.open, false, "sign-in state should close an open auth dialog");
   assert.equal(elements.developerAttribution.hidden, false, "developer attribution should be visible after sign-in");
   assert.equal(elements.historyPanel.hidden, false, "saved conversation history should be available after sign-in");
   assert.equal(elements.historyToggle.hidden, false, "history visibility control should be available after sign-in");
