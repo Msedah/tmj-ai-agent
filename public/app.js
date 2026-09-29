@@ -135,6 +135,7 @@ $("authToggle").addEventListener("click", () => {
   authMode = authMode === "signin" ? "signup" : "signin";
   $("authTitle").textContent = authMode === "signin" ? "Sign in" : "Create account";
   authSubmit.textContent = authMode === "signin" ? "Sign in" : "Create account";
+  $("authToggle").textContent = authMode === "signin" ? "Create an account" : "Already have an account? Sign in";
   $("authName").hidden = authMode === "signin";
   $("authNameLabel").hidden = authMode === "signin";
   $("authPassword").autocomplete = authMode === "signin" ? "current-password" : "new-password";

@@ -73,6 +73,14 @@ test("classic frontend script boots beside the Supabase CDN global and primary c
   elements.authToggle.listeners.get("click")[0]();
   assert.equal(elements.authName.hidden, false, "sign-up should reveal the name field");
   assert.equal(elements.authNameLabel.hidden, false, "sign-up should reveal the name label");
+  assert.equal(elements.authTitle.textContent, "Create account");
+  assert.equal(elements.authToggle.textContent, "Already have an account? Sign in");
+
+  elements.authToggle.listeners.get("click")[0]();
+  assert.equal(elements.authName.hidden, true, "switching back should hide the name field");
+  assert.equal(elements.authNameLabel.hidden, true, "switching back should hide the name label");
+  assert.equal(elements.authTitle.textContent, "Sign in");
+  assert.equal(elements.authToggle.textContent, "Create an account");
 
   elements.authClose.listeners.get("click")[0]();
   assert.equal(elements.authDialog.open, false, "close button should close the auth dialog");
