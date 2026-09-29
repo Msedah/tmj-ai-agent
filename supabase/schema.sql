@@ -70,6 +70,11 @@ create policy "users read own chunks" on public.document_chunks for select
     )
   );
 
+grant select, insert, update on public.conversations to authenticated;
+grant select, insert on public.messages to authenticated;
+grant select on public.documents, public.document_chunks to authenticated;
+grant all privileges on public.conversations, public.messages, public.documents, public.document_chunks to service_role;
+
 create index if not exists conversations_user_updated_idx
   on public.conversations (user_id, updated_at desc);
 create index if not exists messages_conversation_created_idx
@@ -105,6 +110,8 @@ language sql stable as $$
   limit match_count;
 $$;
 
+grant execute on function public.match_document_chunks_cloudflare(vector, integer) to authenticated, service_role;
+
 create or replace function public.touch_conversation()
 returns trigger language plpgsql as $$
 begin
@@ -132,3 +139,5 @@ create policy "users read own tmj documents" on storage.objects for select to au
 drop policy if exists "users delete own tmj documents" on storage.objects;
 create policy "users delete own tmj documents" on storage.objects for delete to authenticated
   using (bucket_id = 'tmj-documents' and (storage.foldername(name))[1] = auth.uid()::text);
+
+notify pgrst, 'reload schema';
