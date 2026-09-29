@@ -1,102 +1,85 @@
 # TMJ AI Agent
 
-Education-only AI assistant built specifically for North-West University (NWU) students.
+Education-only academic assistant for North-West University (NWU) students. The active deployment is a **Cloudflare Worker with static assets**, backed by Supabase and OpenAI.
 
-## Current build
+## Features
 
-- Email/password sign-up and sign-in through Supabase Auth.
-- Saved conversations per authenticated user.
-- Secure private document uploads through Supabase Storage.
-- PDF, DOCX, TXT and Markdown extraction.
-- RAG using OpenAI embeddings + Supabase pgvector.
-- Student-uploaded module material is searchable for that student.
-- Protected ingestion endpoint for public NWU pages.
-- Official NWU sources can be stored as shared `nwu_official` knowledge.
-- Academic-only scope guard.
-- Netlify Functions backend.
-- Developer: TJ Mailula — mailulajosep@gmail.com.
+- Email/password authentication through Supabase Auth.
+- User-scoped saved conversations and private document uploads.
+- PDF, DOCX, TXT, and Markdown text extraction.
+- Retrieval-augmented answers using OpenAI embeddings and Supabase pgvector.
+- Optional ingestion of public NWU resources through a protected endpoint.
+- Academic-only scope guard; the assistant complements rather than replaces NWU instructions.
+- Responsive chat interface with keyboard focus states and accessible live status messages.
 
-NWU's public library resources include eFundi guidance, support guides, research support and academic-integrity resources. Private eFundi course material is not scraped or accessed using student passwords. Students upload material they are authorised to use.
+NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. Do not scrape private eFundi courses or ask students for NWU passwords. Students should only upload material they are authorised to use.
 
-## Required services
+## Architecture
 
-1. Supabase project
-2. OpenAI API key
-3. Netlify site connected to this GitHub repository
+- Worker entry point: `src/index.js`
+- Static site assets: `public/`
+- Supabase schema and RLS: `supabase/schema.sql`
+- Cloudflare config: `wrangler.jsonc`
+- CI: `.github/workflows/ci.yml`
+- Legacy Netlify Functions remain in `netlify/functions/`; they are not the active Cloudflare deployment path.
 
-## Supabase setup
+## Required services and setup
 
-Open the Supabase SQL Editor and run:
+1. Create or use a Supabase project.
+2. In the Supabase SQL Editor, run `supabase/schema.sql`. This creates the conversations, document/RAG tables, vector search function, Storage bucket, and RLS policies.
+3. Create or use an OpenAI API key for server-side chat and embeddings.
+4. Set the Worker values below in **Cloudflare Dashboard → Workers & Pages → `tmj-ai-agent` → Settings → Variables and Secrets**. Use encrypted **Secrets** for API keys and service-role credentials.
 
-`supabase/schema.sql`
+| Name | Required | Handling |
+| --- | --- | --- |
+| `SUPABASE_URL` | Yes | Supabase project URL; keep it consistent with the client config in `public/app.js`. |
+| `SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key; safe for browser use with correct RLS, but must also be present in the Worker for token validation. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes for document/NWU indexing | **Secret; server only. Never put this in browser code or commit it.** |
+| `OPENAI_API_KEY` | Yes for chat and embeddings | **Secret.** |
+| `NWU_INGEST_SECRET` | Only for `/api/index-nwu` | **Secret.** Use a long random value and send it only in the `x-tmj-ingest-secret` header. |
+| `OPENAI_MODEL` | Optional | Defaults to `gpt-4o-mini`. |
+| `OPENAI_EMBEDDING_MODEL` | Optional | Defaults to `text-embedding-3-small`. |
 
-This creates the conversation tables, document/RAG tables, pgvector search function, Storage bucket and RLS policies.
+The browser intentionally uses only the Supabase URL and publishable/anon key. Keep the service-role key and OpenAI key exclusively in Worker secrets. `.env.example` is a blank template; it contains no credentials.
 
-## Netlify environment variables
+## Local development and tests
 
-Add these in Netlify:
-
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY` — server only; never put this in browser code.
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
-- `OPENAI_EMBEDDING_MODEL` — optional, defaults to `text-embedding-3-small`
-- `NWU_INGEST_SECRET` — long random secret for the protected NWU source ingestion endpoint
-
-Also replace the placeholders in `app.js`:
-
-- `YOUR_SUPABASE_URL`
-- `YOUR_SUPABASE_ANON_KEY`
-
-The anon/publishable key is safe for browser use when RLS is correctly configured. The service-role key must remain a Netlify server environment variable.
-
-## Deploy
-
-Connect `Msedah/tmj-ai-agent` to Netlify and deploy from the `main` branch. Netlify automatically detects functions in `netlify/functions` according to the repository configuration.
-
-After deployment:
-
-1. Create a test account.
-2. Confirm sign-in.
-3. Upload a small PADM/POLI module PDF or DOCX.
-4. Wait for the indexing confirmation.
-5. Ask a question that is clearly answered by the uploaded material.
-6. Confirm the conversation appears in Saved conversations.
-7. Sign out and confirm private conversations are no longer visible.
-8. Sign in again and confirm the saved conversation returns.
-
-## Indexing official NWU pages
-
-The protected function is:
-
-`/.netlify/functions/index-nwu`
-
-It accepts a POST body:
-
-```json
-{"url":"https://library.nwu.ac.za/","moduleCode":""}
+```bash
+npm install
+cp .env.example .dev.vars
+# Fill .dev.vars locally; never commit it.
+npx wrangler dev --config wrangler.jsonc
 ```
 
-Send the secret in:
+In another terminal, run:
 
-`x-tmj-ingest-secret: YOUR_NWU_INGEST_SECRET`
+```bash
+npm run check
+npm test
+```
 
-Only use public NWU pages that the application is authorised to retrieve. Do not submit private eFundi URLs or passwords.
+`.dev.vars` is ignored by Git. For production deployment from a developer machine, authenticate Wrangler with the intended Cloudflare account, set secrets with `npx wrangler secret put NAME`, then run `npm run deploy`. Alternatively, connect this repository to Cloudflare's Git deployment flow and deploy the intended branch there.
 
-## Scope
+## API routes
 
-TMJ AI Agent is not a general-purpose assistant. Non-academic questions should be declined. Module-specific questions should prefer retrieved NWU/student material over generic model knowledge.
+- `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document indexing configuration. NWU ingestion is reported separately.
+- `POST /api/chat` — authenticated academic question and conversation persistence.
+- `POST /api/index-document` — authenticated indexing of a previously uploaded user document.
+- `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
 
-## Production roadmap
+## Deployment verification
 
-- Add NWU module catalogue and module-code metadata.
-- Add better document page/section extraction and citations.
-- Add PPTX extraction.
-- Add source freshness/versioning.
-- Add abuse/rate limiting and usage monitoring.
-- Add admin dashboard for NWU source management.
-- Add automated tests and deployment checks.
+After setting the Worker values and deploying:
 
-Developer: TJ Mailula
-Email: mailulajosep@gmail.com
+1. Open `/api/health` and confirm `services.chat` and `services.documentIndexing` are `true`. Confirm `services.nwuIngestion` is `true` only if that optional secret is set.
+2. Create an account, sign in, and sign out again. Confirm the dialog controls respond.
+3. Start a new conversation and submit an academic question.
+4. Upload a small PDF, DOCX, TXT, or MD file and confirm indexing succeeds.
+5. Confirm a saved conversation can be reopened and is not visible after signing out.
+6. Test at desktop and mobile widths, and check the browser console for runtime errors.
+
+## Scope and privacy
+
+TMJ AI Agent is not a general-purpose assistant. Non-academic questions should be declined. Module-specific answers should prioritize retrieved NWU and student-provided material, and should not invent course requirements, citations, or official policy. Verify consequential academic requirements against current NWU module instructions and lecturer guidance.
+
+Developer: TJ Mailula — mailulajosep@gmail.com.

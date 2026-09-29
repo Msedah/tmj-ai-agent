@@ -2,6 +2,18 @@ import { createClient } from "@supabase/supabase-js";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 
+export function extractBearerToken(value = "") {
+  return String(value).replace(/^Bearer\s+/i, "").trim();
+}
+
+export function isSupportedDocument(fileName = "") {
+  return /\.(pdf|docx|txt|md)$/i.test(String(fileName));
+}
+
+export function normalizeExtractedText(value = "") {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
 const SYSTEM_PROMPT = `You are TMJ AI Agent, an academic assistant designed specifically for North-West University (NWU) students.
 
 STRICT PURPOSE:
@@ -20,6 +32,18 @@ DEVELOPER: TJ Mailula | mailulajosep@gmail.com`;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/health") {
+      if (request.method !== "GET") return json(405, { error: "Method not allowed" });
+      const supabaseReady = Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
+      const chatReady = Boolean(supabaseReady && env.OPENAI_API_KEY);
+      const indexingReady = Boolean(chatReady && env.SUPABASE_SERVICE_ROLE_KEY);
+      const nwuIngestionReady = Boolean(env.NWU_INGEST_SECRET && env.OPENAI_API_KEY && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
+      return json(200, {
+        status: "ok",
+        ready: chatReady && indexingReady,
+        services: { chat: chatReady, documentIndexing: indexingReady, nwuIngestion: nwuIngestionReady }
+      });
+    }
     if (url.pathname === "/api/chat") return handleChat(request, env);
     if (url.pathname === "/api/index-document") return handleDocumentIndex(request, env);
     if (url.pathname === "/api/index-nwu") return handleNwuIndex(request, env);
@@ -28,7 +52,7 @@ export default {
 };
 
 async function authenticate(request, env) {
-  const token = (request.headers.get("Authorization") || "").replace(/^Bearer\\s+/i, "");
+  const token = extractBearerToken(request.headers.get("Authorization") || "");
   if (!token) return { error: json(401, { error: "Please sign in first." }) };
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return { error: json(503, { error: "Database service is not configured." }) };
   const client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, { global: { headers: { Authorization: "Bearer " + token } } });
@@ -106,7 +130,7 @@ async function handleDocumentIndex(request, env) {
   const fileName = String(body.fileName || "");
   const moduleCode = String(body.moduleCode || "").trim().toUpperCase();
   if (!path || !fileName || !path.startsWith(auth.user.id + "/")) return json(400, { error: "Invalid document path." });
-  if (!/\\.(pdf|docx|txt|md)$/i.test(fileName)) return json(400, { error: "Supported files are PDF, DOCX, TXT and MD." });
+  if (!isSupportedDocument(fileName)) return json(400, { error: "Supported files are PDF, DOCX, TXT and MD." });
 
   const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
   const download = await admin.storage.from("tmj-documents").download(path);
@@ -115,13 +139,13 @@ async function handleDocumentIndex(request, env) {
   const buffer = Buffer.from(await download.data.arrayBuffer());
   let text = "";
   try {
-    if (/\\.pdf$/i.test(fileName)) text = (await pdfParse(buffer)).text;
-    else if (/\\.docx$/i.test(fileName)) text = (await mammoth.extractRawText({ buffer })).value;
+    if (/\.pdf$/i.test(fileName)) text = (await pdfParse(buffer)).text;
+    else if (/\.docx$/i.test(fileName)) text = (await mammoth.extractRawText({ buffer })).value;
     else text = new TextDecoder().decode(buffer);
   } catch {
     return json(422, { error: "The document could not be extracted. Try a text-based PDF or DOCX." });
   }
-  text = text.replace(/\\s+/g, " ").trim();
+  text = normalizeExtractedText(text);
   if (text.length < 30) return json(422, { error: "No usable text was found in the document." });
 
   const chunks = chunkText(text, 1800, 250);
@@ -167,7 +191,7 @@ async function handleNwuIndex(request, env) {
 
   let text = await response.text();
   if (type.includes("text/html")) text = text.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
-  text = text.replace(/\\s+/g, " ").trim();
+  text = normalizeExtractedText(text);
   if (text.length < 100) return json(422, { error: "The page did not contain enough readable text." });
 
   const chunks = chunkText(text, 1800, 250);
