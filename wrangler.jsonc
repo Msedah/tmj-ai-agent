@@ -4,10 +4,22 @@
   "main": "./src/index.js",
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "SUPABASE_URL": "https://kiaaamxjtvenyaujpysf.supabase.co",
+    "SUPABASE_ANON_KEY": "sb_publishable_F3MdZEjCS99N9oY9z7m9PQ_lwY0FUTr"
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
+  },
+  "ai": { "binding": "AI" },
+  "previews": {
+    "vars": {
+      "SUPABASE_URL": "https://kiaaamxjtvenyaujpysf.supabase.co",
+      "SUPABASE_ANON_KEY": "sb_publishable_F3MdZEjCS99N9oY9z7m9PQ_lwY0FUTr"
+    },
+    "ai": { "binding": "AI" }
   },
   "observability": {
     "enabled": true

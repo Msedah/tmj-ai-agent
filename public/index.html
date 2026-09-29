@@ -1,9 +1,116 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="description" content="TMJ AI Agent — academic AI assistance for NWU students."><title>TMJ AI Agent | NWU Academic Assistant</title><link rel="stylesheet" href="/styles.css"></head>
-<body><header class="topbar"><div class="brand">TMJ <span>AI Agent</span></div><nav><a href="#chat">Chat</a><a href="#about">About</a><button id="authButton" class="button secondary">Sign in</button></nav></header>
-<main><section class="hero"><div><p class="eyebrow">NORTH-WEST UNIVERSITY STUDENTS</p><h1>Your academic AI for NWU modules.</h1><p class="hero-copy">Get explanations, study support and research assistance focused on your university modules, with NWU resources prioritised whenever relevant.</p><a class="button" href="#chat">Start studying</a></div><div class="scope-card"><strong>Education only</strong><p>TMJ AI Agent answers academic and education-related questions. Non-academic requests are outside its purpose.</p></div></section>
-<section id="chat" class="workspace"><aside class="sidebar"><button id="newChat" class="button full">+ New conversation</button><h3>Saved conversations</h3><div id="conversationList" class="conversation-list"><p class="muted">Sign in to save and view conversations.</p></div><div id="uploadPanel" class="upload-panel" hidden><h3>Module material</h3><p class="muted">Upload PDF, DOCX, TXT or MD notes. Your material is prioritised for your questions.</p><form id="uploadForm"><input id="moduleCode" placeholder="Module code e.g. PADM 322" maxlength="30"><input id="documentFile" type="file" accept=".pdf,.docx,.txt,.md" required><button class="button full" type="submit">Upload & index</button><p id="uploadStatus" class="status"></p></form></div></aside>
-<section class="chat-panel"><div id="messages" class="messages"><div class="welcome"><p class="eyebrow">TMJ AI AGENT</p><h2>What are you studying?</h2><p>Try: “Explain my PADM module concept in simple English” or upload your module material.</p></div></div><form id="chatForm" class="composer"><textarea id="prompt" rows="2" maxlength="8000" placeholder="Ask an academic question..." required></textarea><button class="button" type="submit">Ask TMJ AI</button></form><p class="disclaimer">Academic assistance only. Verify important academic requirements against your current NWU module instructions and lecturer guidance.</p></section></section>
-<section id="about" class="about"><h2>Built for NWU students</h2><p>eFundi is NWU's official learning management system and is used for module resources, communication and assessments. TMJ AI is designed to complement those resources, not replace official NWU instructions.</p><p class="developer">Developed by <strong>TJ Mailula</strong> · <a href="mailto:mailulajosep@gmail.com">mailulajosep@gmail.com</a></p></section></main>
-<dialog id="authDialog"><form id="authForm"><button class="close" type="button" id="authClose" aria-label="Close">×</button><h2 id="authTitle">Sign in</h2><input id="authEmail" type="email" placeholder="Email" autocomplete="email" required><input id="authPassword" type="password" placeholder="Password" autocomplete="current-password" minlength="8" required><input id="authName" type="text" placeholder="Name (sign up only)" autocomplete="name" hidden><button id="authSubmit" class="button" type="submit">Sign in</button><button id="authToggle" class="text-button" type="button">Create an account</button><p id="authStatus" class="status"></p></form></dialog>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="/app.js"></script><script>document.getElementById("authClose").addEventListener("click",()=>document.getElementById("authDialog").close());</script></body></html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="TMJ AI Agent — academic AI assistance for NWU students.">
+    <title>TMJ AI Agent | NWU Academic Assistant</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside id="appSidebar" class="sidebar" aria-label="TMJ AI Agent sidebar">
+        <div class="sidebar-top">
+          <a class="brand" href="#chat" aria-label="TMJ AI Agent home">
+            <span class="brand-mark" aria-hidden="true">T</span>
+            <span>TMJ <strong>AI Agent</strong></span>
+          </a>
+          <button id="newChat" class="new-chat" type="button"><span aria-hidden="true">＋</span> New chat</button>
+        </div>
+
+        <section id="historyPanel" class="history-panel" aria-labelledby="historyTitle" hidden>
+          <h2 id="historyTitle">Recent conversations</h2>
+          <div id="conversationList" class="conversation-list" aria-live="polite"></div>
+        </section>
+
+        <section id="uploadPanel" class="upload-panel" aria-labelledby="uploadTitle" hidden>
+          <h2 id="uploadTitle">Module materials</h2>
+          <p class="muted">Upload PDF, DOCX, TXT or MD notes to use them in your study questions.</p>
+          <form id="uploadForm">
+            <label for="moduleCode">Module code <span>(optional)</span></label>
+            <input id="moduleCode" placeholder="e.g. PADM 322" maxlength="30">
+            <label for="documentFile">Choose a document</label>
+            <input id="documentFile" type="file" accept=".pdf,.docx,.txt,.md" required>
+            <button class="button upload-button" type="submit">Upload &amp; index</button>
+            <p id="uploadStatus" class="status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-footer">
+          <div class="sidebar-note">
+            <span class="eyebrow">NWU study support</span>
+            <p>Academic help to complement your module material and lecturer guidance.</p>
+          </div>
+          <a id="aboutLink" class="sidebar-link" href="#about">About TMJ AI</a>
+          <p id="accountIdentity" class="account-identity" hidden></p>
+          <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
+          <p id="developerAttribution" class="developer" hidden>Developed by <strong>TJ Mailula</strong><br><a href="mailto:mailulajosep@gmail.com">mailulajosep@gmail.com</a></p>
+          <button id="historyToggle" class="history-toggle" type="button" aria-controls="historyPanel" aria-expanded="true" hidden>Hide history</button>
+        </div>
+      </aside>
+
+      <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="Close sidebar" hidden></button>
+
+      <main id="top" class="main-pane">
+        <header class="app-header">
+          <div class="header-leading">
+            <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Open sidebar" aria-controls="appSidebar" aria-expanded="false">
+              <span aria-hidden="true">☰</span>
+            </button>
+            <div class="app-heading">
+              <h1>TMJ AI Agent</h1>
+              <p>Academic assistant for North-West University</p>
+            </div>
+          </div>
+          <span class="study-pill"><span class="status-dot" aria-hidden="true"></span> Study mode</span>
+        </header>
+
+        <p id="appStatus" class="global-status" role="status" aria-live="polite"></p>
+
+        <section id="chat" class="chat-panel" aria-label="Chat with TMJ AI">
+          <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text">
+            <div class="welcome">
+              <div class="welcome-mark" aria-hidden="true">T</div>
+              <p class="eyebrow">YOUR NWU STUDY PARTNER</p>
+              <h2>What are you studying today?</h2>
+              <p>Ask a module question for a clear, structured explanation.</p>
+            </div>
+          </div>
+
+          <form id="chatForm" class="composer">
+            <label class="visually-hidden" for="prompt">Ask an academic question</label>
+            <textarea id="prompt" rows="2" maxlength="8000" placeholder="Message TMJ AI…" required></textarea>
+            <button class="send-button" type="submit" aria-label="Send message"><span>Ask</span><span aria-hidden="true">↑</span></button>
+          </form>
+          <p id="chatStatus" class="status chat-status" role="status" aria-live="polite"></p>
+          <p class="disclaimer">Academic assistance only. Verify important requirements against your current NWU module instructions and lecturer guidance.</p>
+        </section>
+
+        <section id="about" class="about" aria-labelledby="aboutTitle">
+          <h2 id="aboutTitle">About TMJ AI</h2>
+          <p>TMJ AI Agent supports NWU students with academic questions and study material. It complements eFundi and official lecturer instructions; it does not replace them.</p>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="authDialog" aria-labelledby="authTitle">
+      <form id="authForm">
+        <button id="authClose" class="close" type="button" aria-label="Close sign-in dialog">×</button>
+        <p class="eyebrow">TMJ AI AGENT</p>
+        <h2 id="authTitle">Sign in</h2>
+        <label for="authEmail">Email address</label>
+        <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+        <label for="authPassword">Password (at least 8 characters)</label>
+        <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required>
+        <button id="authSubmit" class="button" type="submit">Sign in</button>
+        <button id="authToggle" class="text-button" type="button">Create an account</button>
+        <p id="authStatus" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </dialog>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

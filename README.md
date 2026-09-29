@@ -1,102 +1,85 @@
 # TMJ AI Agent
 
-Education-only AI assistant built specifically for North-West University (NWU) students.
+Education-only academic assistant for North-West University (NWU) students. The active deployment is a **Cloudflare Worker with static assets**, backed by Supabase Auth/Postgres/Storage and Cloudflare Workers AI.
 
-## Current build
+## Features
 
-- Email/password sign-up and sign-in through Supabase Auth.
-- Saved conversations per authenticated user.
-- Secure private document uploads through Supabase Storage.
-- PDF, DOCX, TXT and Markdown extraction.
-- RAG using OpenAI embeddings + Supabase pgvector.
-- Student-uploaded module material is searchable for that student.
-- Protected ingestion endpoint for public NWU pages.
-- Official NWU sources can be stored as shared `nwu_official` knowledge.
-- Academic-only scope guard.
-- Netlify Functions backend.
-- Developer: TJ Mailula — mailulajosep@gmail.com.
+- Email/password authentication through Supabase Auth; email is the account label and is shortened in the sidebar when long.
+- User-scoped saved conversations and private document uploads.
+- PDF, DOCX, TXT, and Markdown text extraction.
+- Retrieval-augmented academic answers using Cloudflare Workers AI and Supabase pgvector.
+- Optional ingestion of public NWU resources through a protected endpoint.
+- Academic-only scope guard; the assistant complements rather than replaces NWU instructions.
+- Responsive chat interface with keyboard focus states and accessible live status messages.
 
-NWU's public library resources include eFundi guidance, support guides, research support and academic-integrity resources. Private eFundi course material is not scraped or accessed using student passwords. Students upload material they are authorised to use.
+NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. Do not scrape private eFundi courses or ask students for NWU passwords. Students should only upload material they are authorised to use.
 
-## Required services
+## Architecture
 
-1. Supabase project
-2. OpenAI API key
-3. Netlify site connected to this GitHub repository
+- Worker entry point: `src/index.js`
+- Static site assets: `public/`
+- Supabase schema and row-level security: `supabase/schema.sql`
+- Cloudflare config and Workers AI binding: `wrangler.jsonc`
+- CI: `.github/workflows/ci.yml`
+- Legacy Netlify Functions remain in `netlify/functions/`; they are not the active Cloudflare deployment path.
 
-## Supabase setup
+The active Worker uses `@cf/meta/llama-3.2-3b-instruct` for chat and `@cf/baai/bge-small-en-v1.5` for embeddings. No OpenAI API key is used by the Cloudflare Worker. The vector search stores Cloudflare's 384-dimensional vectors separately in `embedding_cloudflare`; an older `embedding` column and its data, if present, are left untouched. Previously indexed documents need to be uploaded and indexed again before their content is searchable with Cloudflare embeddings.
 
-Open the Supabase SQL Editor and run:
+## Required services and setup
 
-`supabase/schema.sql`
+1. In the Supabase SQL Editor, run `supabase/schema.sql`. It creates the conversation, message, document, and chunk tables, the Cloudflare vector-search function, the private Storage bucket, and row-level security policies. The script is safe to rerun and preserves any pre-existing OpenAI embedding column/data.
+2. In Supabase **Authentication → Sign In / Providers**, keep **Allow new users to sign up** enabled and turn **Confirm email** off. Email and password remain required; no display-name field is collected. Turning off confirmation allows account creation/sign-in without proving control of the email address, so users should still use an address they own.
+3. Set the Worker values in **Cloudflare Dashboard → Workers & Pages → `tmj-ai-agent` → Settings → Variables and Secrets**. The Workers AI binding named `AI` is declared in `wrangler.jsonc`; it does not need an AI provider API key.
 
-This creates the conversation tables, document/RAG tables, pgvector search function, Storage bucket and RLS policies.
+| Name | Required | Handling |
+| --- | --- | --- |
+| `SUPABASE_URL` | Yes | Supabase project URL; keep consistent with the public client config in `public/app.js`. |
+| `SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key; safe for browser use with correct RLS, but also required by the Worker for user-token validation. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes for document/NWU indexing | **Secret; server only. Never put this in browser code or commit it.** |
+| `NWU_INGEST_SECRET` | Only for `/api/index-nwu` | **Secret.** Use a long random value and send it only in the `x-tmj-ingest-secret` header. |
 
-## Netlify environment variables
+### Free-tier limits
 
-Add these in Netlify:
+Cloudflare Workers AI currently includes **10,000 Neurons per day** on Free and Paid Workers plans. Neurons are not a fixed number of tokens or chats. If a Free-plan account reaches its daily allocation, AI requests fail until reset; Paid-plan usage beyond the allocation can incur charges. Upload indexing also consumes the AI allowance, so the Worker caps a single document at 80 chunks and one NWU page at 100 chunks. Check Cloudflare's [current pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) before increasing limits or changing models. Supabase and Cloudflare Worker limits also apply independently.
 
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY` — server only; never put this in browser code.
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
-- `OPENAI_EMBEDDING_MODEL` — optional, defaults to `text-embedding-3-small`
-- `NWU_INGEST_SECRET` — long random secret for the protected NWU source ingestion endpoint
+## Local development and tests
 
-Also replace the placeholders in `app.js`:
-
-- `YOUR_SUPABASE_URL`
-- `YOUR_SUPABASE_ANON_KEY`
-
-The anon/publishable key is safe for browser use when RLS is correctly configured. The service-role key must remain a Netlify server environment variable.
-
-## Deploy
-
-Connect `Msedah/tmj-ai-agent` to Netlify and deploy from the `main` branch. Netlify automatically detects functions in `netlify/functions` according to the repository configuration.
-
-After deployment:
-
-1. Create a test account.
-2. Confirm sign-in.
-3. Upload a small PADM/POLI module PDF or DOCX.
-4. Wait for the indexing confirmation.
-5. Ask a question that is clearly answered by the uploaded material.
-6. Confirm the conversation appears in Saved conversations.
-7. Sign out and confirm private conversations are no longer visible.
-8. Sign in again and confirm the saved conversation returns.
-
-## Indexing official NWU pages
-
-The protected function is:
-
-`/.netlify/functions/index-nwu`
-
-It accepts a POST body:
-
-```json
-{"url":"https://library.nwu.ac.za/","moduleCode":""}
+```bash
+npm install
+cp .env.example .dev.vars
+# Fill .dev.vars locally; never commit it.
+npx wrangler dev --config wrangler.jsonc
 ```
 
-Send the secret in:
+In another terminal, run:
 
-`x-tmj-ingest-secret: YOUR_NWU_INGEST_SECRET`
+```bash
+npm run check
+npm test
+```
 
-Only use public NWU pages that the application is authorised to retrieve. Do not submit private eFundi URLs or passwords.
+`.dev.vars` is ignored by Git. Local AI inference requires a working Cloudflare Workers AI binding and uses the same Cloudflare account allocation. For production, deploy through the connected Cloudflare Git build or authenticate Wrangler with the intended Cloudflare account and run `npm run deploy`.
 
-## Scope
+## API routes
 
-TMJ AI Agent is not a general-purpose assistant. Non-academic questions should be declined. Module-specific questions should prefer retrieved NWU/student material over generic model knowledge.
+- `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document-indexing configuration. NWU ingestion is reported separately. Health does not consume an AI request or guarantee remaining daily quota.
+- `POST /api/chat` — authenticated academic question, vector retrieval, and conversation persistence.
+- `POST /api/index-document` — authenticated indexing of an uploaded user document.
+- `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
 
-## Production roadmap
+## Deployment verification
 
-- Add NWU module catalogue and module-code metadata.
-- Add better document page/section extraction and citations.
-- Add PPTX extraction.
-- Add source freshness/versioning.
-- Add abuse/rate limiting and usage monitoring.
-- Add admin dashboard for NWU source management.
-- Add automated tests and deployment checks.
+After applying the Supabase schema and setting Worker variables:
 
-Developer: TJ Mailula
-Email: mailulajosep@gmail.com
+1. Open `/api/health` and confirm `services.ai`, `services.chat`, and `services.documentIndexing` are `true`. Confirm `services.nwuIngestion` is `true` only if that optional secret is set.
+2. Create an account using a valid email and password; confirm it can sign in without an email-verification step.
+3. Sign out and sign in again; confirm the sidebar shows the shortened email and hides saved history while signed out.
+4. Start a new conversation and submit an academic question. Verify the response is saved and can be reopened.
+5. Upload a small PDF, DOCX, TXT, or MD file and confirm indexing succeeds.
+6. Test at desktop and mobile widths, and check the browser console for runtime errors.
+
+## Scope and privacy
+
+TMJ AI Agent is not a general-purpose assistant. Non-academic questions should be declined. Module-specific answers should prioritize retrieved NWU and student-provided material, and should not invent course requirements, citations, or official policy. Verify consequential academic requirements against current NWU module instructions and lecturer guidance.
+
+Developer: TJ Mailula — mailulajosep@gmail.com.
