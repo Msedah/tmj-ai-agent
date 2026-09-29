@@ -7,6 +7,7 @@ let supabaseClient = null;
 let session = null;
 let currentConversation = null;
 let authMode = "signin";
+let historyVisible = true;
 
 const $ = (id) => document.getElementById(id);
 const authDialog = $("authDialog");
@@ -60,6 +61,13 @@ sidebarToggle?.addEventListener("click", () => {
 });
 sidebarOverlay?.addEventListener("click", () => setSidebarOpen(false));
 $("aboutLink")?.addEventListener("click", () => setSidebarOpen(false));
+$("historyToggle")?.addEventListener("click", () => {
+  historyVisible = !historyVisible;
+  $("historyPanel").hidden = !session || !historyVisible;
+  const control = $("historyToggle");
+  control.textContent = historyVisible ? "Hide history" : "Show history";
+  control.setAttribute("aria-expanded", String(Boolean(session && historyVisible)));
+});
 
 function updateAuthUI() {
   authButton.textContent = session ? "Sign out" : "Sign in";
@@ -74,7 +82,13 @@ function updateAuthUI() {
   }
   // Starting a new local draft is useful even before sign-in; saving it still requires an account.
   $("newChat").disabled = false;
-  $("historyPanel").hidden = !session;
+  $("historyPanel").hidden = !session || !historyVisible;
+  const historyToggle = $("historyToggle");
+  if (historyToggle) {
+    historyToggle.hidden = !session;
+    historyToggle.textContent = historyVisible ? "Hide history" : "Show history";
+    historyToggle.setAttribute("aria-expanded", String(Boolean(session && historyVisible)));
+  }
   $("developerAttribution").hidden = !session;
   $("uploadPanel").hidden = !session;
 
@@ -84,7 +98,7 @@ function updateAuthUI() {
 }
 
 function renderWelcome() {
-  $("messages").innerHTML = '<div class="welcome"><div class="welcome-mark" aria-hidden="true">T</div><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question, get a clear explanation, or sign in to upload your course material.</p><p class="example-prompt">Try: “Explain my PADM module concept in simple English.”</p></div>';
+  $("messages").innerHTML = '<div class="welcome"><div class="welcome-mark" aria-hidden="true">T</div><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question for a clear, structured explanation.</p></div>';
 }
 
 function addMessage(role, text) {
@@ -206,7 +220,7 @@ authForm.addEventListener("submit", async (event) => {
       setStatus(authStatus, result.error.message);
     } else if (result.data.session) {
       authDialog.close();
-      setStatus($("appStatus"), "Signed in successfully.", "success");
+      setStatus($("appStatus"), "", "success");
     } else {
       setStatus(authStatus, "Account created, but no session was returned. Check whether email confirmation is still enabled in Supabase.");
     }
@@ -223,7 +237,7 @@ $("newChat").addEventListener("click", () => {
   currentConversation = null;
   chatForm.reset();
   renderWelcome();
-  setStatus(chatStatus, "New conversation ready.", "success");
+  setStatus(chatStatus, "", "success");
   $("prompt").focus();
 });
 

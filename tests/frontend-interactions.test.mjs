@@ -51,7 +51,7 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
     "authClose", "authEmail", "authPassword", "authTitle", "accountIdentity",
     "chatForm", "chatStatus", "prompt", "messages", "newChat", "uploadForm",
     "uploadStatus", "uploadPanel", "historyPanel", "conversationList", "appStatus", "documentFile", "moduleCode",
-    "developerAttribution", "sidebarToggle", "sidebarOverlay", "aboutLink"
+    "developerAttribution", "sidebarToggle", "sidebarOverlay", "aboutLink", "historyToggle"
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new ElementMock(id)]));
   elements.chatForm.reset = () => { elements.prompt.value = ""; };
@@ -89,6 +89,7 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.doesNotThrow(() => new vm.Script(source, { filename: "public/app.js" }).runInContext(context));
   assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden when signed out");
   assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden when signed out");
+  assert.equal(elements.historyToggle.hidden, true, "history visibility control should be private when signed out");
   assert.equal(elements.uploadPanel.hidden, true, "private module uploads should be hidden when signed out");
   assert.equal(elements.accountIdentity.hidden, true, "account email should be hidden when signed out");
 
@@ -133,7 +134,9 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   elements.prompt.value = "draft question";
   elements.newChat.listeners.get("click")[0]();
   assert.equal(elements.prompt.value, "", "new conversation should clear the draft");
+  assert.equal(elements.chatStatus.textContent, "", "new conversation should not show a success notice");
   assert.match(elements.messages.innerHTML, /What are you studying today\?/);
+  assert.doesNotMatch(elements.messages.innerHTML, /sign in to upload your course material|Try:/i, "welcome copy should not show signup prompts or sample text");
 
   elements.prompt.value = "Explain a first-year biology concept.";
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
@@ -150,6 +153,16 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   await Promise.resolve();
   assert.equal(elements.developerAttribution.hidden, false, "developer attribution should be visible after sign-in");
   assert.equal(elements.historyPanel.hidden, false, "saved conversation history should be available after sign-in");
+  assert.equal(elements.historyToggle.hidden, false, "history visibility control should be available after sign-in");
+  assert.equal(elements.historyToggle.textContent, "Hide history");
+  assert.equal(elements.historyToggle.getAttribute("aria-expanded"), "true");
+  elements.historyToggle.listeners.get("click")[0]();
+  assert.equal(elements.historyPanel.hidden, true, "history button should hide the conversation list");
+  assert.equal(elements.historyToggle.textContent, "Show history");
+  assert.equal(elements.historyToggle.getAttribute("aria-expanded"), "false");
+  elements.historyToggle.listeners.get("click")[0]();
+  assert.equal(elements.historyPanel.hidden, false, "history button should restore the conversation list");
+  assert.equal(elements.historyToggle.getAttribute("aria-expanded"), "true");
   assert.equal(elements.uploadPanel.hidden, false, "module uploads should be available after sign-in");
   assert.equal(elements.accountIdentity.hidden, false, "account email should be shown after sign-in");
   assert.ok(elements.accountIdentity.textContent.length <= 25, "long email should be minimized in the sidebar");
@@ -160,4 +173,6 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden again after sign-out");
   assert.equal(elements.uploadPanel.hidden, true, "module uploads should be hidden again after sign-out");
   assert.equal(elements.accountIdentity.hidden, true, "account email should be hidden again after sign-out");
+  assert.equal(elements.historyToggle.hidden, true, "history visibility control should hide again after sign-out");
+  assert.doesNotMatch(source, /Signed in successfully\.|New conversation ready\./, "transient success notices should not be displayed");
 });
