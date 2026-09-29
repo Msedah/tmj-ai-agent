@@ -44,6 +44,7 @@
             <p>Academic help to complement your module material and lecturer guidance.</p>
           </div>
           <a id="aboutLink" class="sidebar-link" href="#about">About TMJ AI</a>
+          <p id="accountIdentity" class="account-identity" hidden></p>
           <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
           <p id="developerAttribution" class="developer" hidden>Developed by <strong>TJ Mailula</strong><br><a href="mailto:mailulajosep@gmail.com">mailulajosep@gmail.com</a></p>
         </div>
@@ -101,10 +102,8 @@
         <h2 id="authTitle">Sign in</h2>
         <label for="authEmail">Email address</label>
         <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
-        <label for="authPassword">Password</label>
+        <label for="authPassword">Password (at least 8 characters)</label>
         <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required>
-        <label id="authNameLabel" for="authName" hidden>Your name</label>
-        <input id="authName" type="text" placeholder="Name (sign-up only)" autocomplete="name" hidden>
         <button id="authSubmit" class="button" type="submit">Sign in</button>
         <button id="authToggle" class="text-button" type="button">Create an account</button>
         <p id="authStatus" class="status" role="status" aria-live="polite"></p>

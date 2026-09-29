@@ -124,6 +124,7 @@ a { color: inherit; }
 }
 .auth-button:hover { background: #dceddf; }
 .auth-button:disabled { opacity: 0.6; cursor: wait; }
+.account-identity { max-width: 100%; margin: -3px 2px -2px; overflow: hidden; color: #3f4e55; font-size: 0.76rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .developer { margin: 0; color: #7a858c; font-size: 0.7rem; line-height: 1.45; overflow-wrap: anywhere; }
 .developer a { color: var(--green-dark); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 

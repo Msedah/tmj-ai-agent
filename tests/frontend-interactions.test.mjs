@@ -42,12 +42,13 @@ class ElementMock {
   appendChild(child) { this.children.push(child); return child; }
   replaceChildren(...children) { this.children = children; }
   querySelector() { return new ElementMock(`${this.id}-submit`); }
+  reportValidity() { return this.validity !== false; }
 }
 
 test("classic frontend script boots beside Supabase and dashboard controls respond", async () => {
   const ids = [
     "authDialog", "authButton", "authForm", "authSubmit", "authStatus", "authToggle",
-    "authClose", "authEmail", "authPassword", "authName", "authNameLabel", "authTitle",
+    "authClose", "authEmail", "authPassword", "authTitle", "accountIdentity",
     "chatForm", "chatStatus", "prompt", "messages", "newChat", "uploadForm",
     "uploadStatus", "uploadPanel", "historyPanel", "conversationList", "appStatus", "documentFile", "moduleCode",
     "developerAttribution", "sidebarToggle", "sidebarOverlay", "aboutLink"
@@ -58,11 +59,20 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   elements.uploadForm.querySelector = () => new ElementMock("upload-submit");
 
   let authStateListener;
+  const authCalls = [];
   const sdk = {
     createClient: () => ({
       auth: {
         onAuthStateChange(listener) { authStateListener = listener; },
-        getSession: async () => ({ data: { session: null }, error: null })
+        getSession: async () => ({ data: { session: null }, error: null }),
+        async signUp(credentials) {
+          authCalls.push({ method: "signUp", credentials });
+          return { data: { session: { access_token: "signup-token", user: { id: "new-user", email: credentials.email } } }, error: null };
+        },
+        async signInWithPassword(credentials) {
+          authCalls.push({ method: "signInWithPassword", credentials });
+          return { data: { session: { access_token: "signin-token", user: { id: "new-user", email: credentials.email } } }, error: null };
+        }
       }
     })
   };
@@ -80,6 +90,7 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden when signed out");
   assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden when signed out");
   assert.equal(elements.uploadPanel.hidden, true, "private module uploads should be hidden when signed out");
+  assert.equal(elements.accountIdentity.hidden, true, "account email should be hidden when signed out");
 
   elements.sidebarToggle.listeners.get("click")[0]();
   assert.equal(bodyClasses.has("sidebar-open"), true, "mobile menu should open the sidebar");
@@ -92,14 +103,27 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.equal(elements.authDialog.open, true, "sign-in button should open the auth dialog");
 
   elements.authToggle.listeners.get("click")[0]();
-  assert.equal(elements.authName.hidden, false, "sign-up should reveal the name field");
-  assert.equal(elements.authNameLabel.hidden, false, "sign-up should reveal the name label");
   assert.equal(elements.authTitle.textContent, "Create account");
   assert.equal(elements.authToggle.textContent, "Already have an account? Sign in");
+  assert.doesNotMatch(source, /authName|full_name/, "signup should not collect or submit a separate name");
+
+  elements.authEmail.value = "not-an-email";
+  elements.authPassword.value = "a-valid-password";
+  elements.authForm.validity = false;
+  await elements.authForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(authCalls.length, 0, "invalid email/password form should not call Supabase");
+  assert.match(elements.authStatus.textContent, /valid email address and password/);
+
+  elements.authEmail.value = "  student@nwu.ac.za  ";
+  elements.authPassword.value = "a-valid-password";
+  elements.authForm.validity = true;
+  await elements.authForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(authCalls[0].method, "signUp");
+  assert.equal(authCalls[0].credentials.email, "student@nwu.ac.za");
+  assert.equal(authCalls[0].credentials.password, "a-valid-password");
+  assert.equal(Object.hasOwn(authCalls[0].credentials, "options"), false, "signup should not submit a separate name payload");
 
   elements.authToggle.listeners.get("click")[0]();
-  assert.equal(elements.authName.hidden, true, "switching back should hide the name field");
-  assert.equal(elements.authNameLabel.hidden, true, "switching back should hide the name label");
   assert.equal(elements.authTitle.textContent, "Sign in");
   assert.equal(elements.authToggle.textContent, "Create an account");
 
@@ -122,12 +146,18 @@ test("classic frontend script boots beside Supabase and dashboard controls respo
   assert.match(elements.authStatus.textContent, /Sign in to upload/);
   elements.authClose.listeners.get("click")[0]();
 
-  authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user" } });
+  authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user", email: "averyveryverylongemailaddress@example.com" } });
+  await Promise.resolve();
   assert.equal(elements.developerAttribution.hidden, false, "developer attribution should be visible after sign-in");
   assert.equal(elements.historyPanel.hidden, false, "saved conversation history should be available after sign-in");
   assert.equal(elements.uploadPanel.hidden, false, "module uploads should be available after sign-in");
+  assert.equal(elements.accountIdentity.hidden, false, "account email should be shown after sign-in");
+  assert.ok(elements.accountIdentity.textContent.length <= 25, "long email should be minimized in the sidebar");
+  assert.equal(elements.accountIdentity.title, "averyveryverylongemailaddress@example.com", "full email remains available as a title");
   authStateListener("SIGNED_OUT", null);
+  await Promise.resolve();
   assert.equal(elements.developerAttribution.hidden, true, "developer attribution should be hidden again after sign-out");
   assert.equal(elements.historyPanel.hidden, true, "saved conversation history should be hidden again after sign-out");
   assert.equal(elements.uploadPanel.hidden, true, "module uploads should be hidden again after sign-out");
+  assert.equal(elements.accountIdentity.hidden, true, "account email should be hidden again after sign-out");
 });

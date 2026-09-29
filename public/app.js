@@ -25,6 +25,18 @@ function setStatus(element, message, kind = "error") {
   element.dataset.kind = kind;
 }
 
+function shortenEmail(email, maxLength = 25) {
+  const value = String(email || "");
+  if (value.length <= maxLength) return value;
+  const at = value.lastIndexOf("@");
+  if (at <= 0 || at === value.length - 1) return value.slice(0, maxLength - 1) + "…";
+  const local = value.slice(0, at);
+  const domain = value.slice(at + 1);
+  const localLength = maxLength - domain.length - 2;
+  if (localLength >= 3) return local.slice(0, localLength) + "…@" + domain;
+  return value.slice(0, maxLength - 1) + "…";
+}
+
 function showAuthDialog(message = "") {
   setStatus(authStatus, message, message ? "info" : "error");
   if (authDialog && !authDialog.open) {
@@ -52,6 +64,14 @@ $("aboutLink")?.addEventListener("click", () => setSidebarOpen(false));
 function updateAuthUI() {
   authButton.textContent = session ? "Sign out" : "Sign in";
   authButton.setAttribute("aria-label", session ? "Sign out of your account" : "Sign in to your account");
+  const accountIdentity = $("accountIdentity");
+  const accountEmail = session?.user?.email || "";
+  if (accountIdentity) {
+    accountIdentity.hidden = !accountEmail;
+    accountIdentity.textContent = shortenEmail(accountEmail);
+    accountIdentity.title = accountEmail;
+    accountIdentity.setAttribute("aria-label", accountEmail ? `Signed in as ${accountEmail}` : "");
+  }
   // Starting a new local draft is useful even before sign-in; saving it still requires an account.
   $("newChat").disabled = false;
   $("historyPanel").hidden = !session;
@@ -154,22 +174,25 @@ $("authToggle").addEventListener("click", () => {
   $("authTitle").textContent = authMode === "signin" ? "Sign in" : "Create account";
   authSubmit.textContent = authMode === "signin" ? "Sign in" : "Create account";
   $("authToggle").textContent = authMode === "signin" ? "Create an account" : "Already have an account? Sign in";
-  $("authName").hidden = authMode === "signin";
-  $("authNameLabel").hidden = authMode === "signin";
   $("authPassword").autocomplete = authMode === "signin" ? "current-password" : "new-password";
   setStatus(authStatus, "", "info");
 });
 
 authForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const emailInput = $("authEmail");
+  emailInput.value = emailInput.value.trim();
+  if (typeof authForm.reportValidity === "function" && !authForm.reportValidity()) {
+    setStatus(authStatus, "Enter a valid email address and password.");
+    return;
+  }
   if (!supabaseClient) {
     setStatus(authStatus, "Account services are not configured yet. Please contact the site administrator.");
     return;
   }
 
-  const email = $("authEmail").value.trim();
+  const email = emailInput.value;
   const password = $("authPassword").value;
-  const name = $("authName").value.trim();
   authSubmit.disabled = true;
   authSubmit.textContent = authMode === "signin" ? "Signing in…" : "Creating account…";
   setStatus(authStatus, "", "info");
@@ -177,7 +200,7 @@ authForm.addEventListener("submit", async (event) => {
   try {
     const result = authMode === "signin"
       ? await supabaseClient.auth.signInWithPassword({ email, password })
-      : await supabaseClient.auth.signUp({ email, password, options: { data: { full_name: name } } });
+      : await supabaseClient.auth.signUp({ email, password });
 
     if (result.error) {
       setStatus(authStatus, result.error.message);
@@ -185,7 +208,7 @@ authForm.addEventListener("submit", async (event) => {
       authDialog.close();
       setStatus($("appStatus"), "Signed in successfully.", "success");
     } else {
-      setStatus(authStatus, "Check your email to confirm your account.", "success");
+      setStatus(authStatus, "Account created, but no session was returned. Check whether email confirmation is still enabled in Supabase.");
     }
   } catch {
     setStatus(authStatus, "Could not reach the sign-in service. Please try again.");
