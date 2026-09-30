@@ -24,19 +24,6 @@
           <div id="conversationList" class="conversation-list" aria-live="polite"></div>
         </section>
 
-        <section id="uploadPanel" class="upload-panel" aria-labelledby="uploadTitle" hidden>
-          <h2 id="uploadTitle">Module materials</h2>
-          <p class="muted">Upload PDF, DOCX, TXT or MD notes to use them in your study questions.</p>
-          <form id="uploadForm">
-            <label for="moduleCode">Module code <span>(optional)</span></label>
-            <input id="moduleCode" placeholder="e.g. PADM 322" maxlength="30">
-            <label for="documentFile">Choose a document</label>
-            <input id="documentFile" type="file" accept=".pdf,.docx,.txt,.md" required>
-            <button class="button upload-button" type="submit">Upload &amp; index</button>
-            <p id="uploadStatus" class="status" role="status" aria-live="polite"></p>
-          </form>
-        </section>
-
         <div class="sidebar-spacer"></div>
         <div class="sidebar-footer">
           <div class="sidebar-note">
@@ -46,7 +33,6 @@
           <a id="aboutLink" class="sidebar-link" href="#about">About TMJ AI</a>
           <p id="accountIdentity" class="account-identity" hidden></p>
           <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
-          <p id="developerAttribution" class="developer" hidden>Developed by <strong>TJ Mailula</strong><br><a href="mailto:mailulajosep@gmail.com">mailulajosep@gmail.com</a></p>
           <button id="historyToggle" class="history-toggle" type="button" aria-controls="historyPanel" aria-expanded="true" hidden>Hide history</button>
         </div>
       </aside>
@@ -81,16 +67,35 @@
 
           <form id="chatForm" class="composer">
             <label class="visually-hidden" for="prompt">Ask an academic question</label>
-            <textarea id="prompt" rows="2" maxlength="8000" placeholder="Message TMJ AI…" required></textarea>
-            <button class="send-button" type="submit" aria-label="Send message"><span>Ask</span><span aria-hidden="true">↑</span></button>
+            <textarea id="prompt" rows="2" maxlength="8000" placeholder="Message TMJ AI…"></textarea>
+            <div class="composer-bottom">
+              <div id="attachmentControls" class="attachment-controls" hidden>
+                <input id="documentFile" type="file" accept=".pdf,.docx,.txt,.md" hidden>
+                <button id="attachDocument" class="attach-button" type="button" aria-label="Attach a study document" title="Attach PDF, DOCX, TXT or Markdown notes">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-8.9 8.9a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+                  <span>Attach</span>
+                </button>
+                <div id="attachmentPreview" class="attachment-preview" hidden>
+                  <span id="attachmentName" class="attachment-name"></span>
+                  <button id="removeAttachment" class="remove-attachment" type="button" aria-label="Remove attached document">Remove</button>
+                </div>
+                <div id="moduleCodeControl" class="module-code-control" hidden>
+                  <label class="visually-hidden" for="moduleCode">Module code (optional)</label>
+                  <input id="moduleCode" type="text" placeholder="Module code (optional)" maxlength="30" autocomplete="off">
+                </div>
+                <span class="upload-hint">PDF, DOCX, TXT or MD · up to 10 MB</span>
+              </div>
+              <button id="sendButton" class="send-button" type="submit" aria-label="Send message"><span id="sendLabel">Ask TMJ AI</span><span aria-hidden="true">↑</span></button>
+            </div>
           </form>
           <p id="chatStatus" class="status chat-status" role="status" aria-live="polite"></p>
-          <p class="disclaimer">Academic assistance only. Verify important requirements against your current NWU module instructions and lecturer guidance.</p>
+          <p id="uploadStatus" class="status chat-status" role="status" aria-live="polite"></p>
+          <p class="disclaimer">Live NWU search uses topic keywords from your question on NWU’s public website. Do not include passwords or sensitive personal information. Verify current requirements against your module instructions and lecturer guidance.</p>
         </section>
 
         <section id="about" class="about" aria-labelledby="aboutTitle">
           <h2 id="aboutTitle">About TMJ AI</h2>
-          <p>TMJ AI Agent supports NWU students with academic questions and study material. It complements eFundi and official lecturer instructions; it does not replace them.</p>
+          <p>TMJ AI Agent supports NWU students with academic questions using current public NWU pages, linked documents, and material you choose to upload. It complements eFundi and official lecturer instructions; it does not replace them.</p>
         </section>
       </main>
     </div>
