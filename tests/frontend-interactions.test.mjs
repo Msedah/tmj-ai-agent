@@ -20,9 +20,15 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(markup, /id="sidebarCollapse"[^>]*aria-label="Hide left panel"/);
   assert.match(markup, /id="aboutToggle"[^>]*aria-expanded="false"/);
   assert.match(markup, /<section id="about"[^>]*hidden>/);
+  assert.match(markup, /src="\/tmj-mark\.svg"/);
+  assert.match(markup, /class="starter-prompt"/);
+  assert.match(markup, /independent study aid, not an official NWU service/i);
+  assert.match(markup, /Deleting a conversation does not delete its uploaded file or indexed text/i);
+  assert.match(markup, /Cloudflare Workers AI/);
+  assert.match(markup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
   assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
-  assert.match(markup, /NWU’s public website/);
+  assert.match(markup, /Live NWU search uses topic keywords/);
 });
 
 class ElementMock {
@@ -79,7 +85,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const elements = Object.fromEntries(ids.map(id => [id, new ElementMock(id)]));
   elements.about.hidden = true;
   elements.sidebarCollapse.textContent = "Hide left panel";
-  elements.aboutToggle.textContent = "About TMJ AI";
+  elements.aboutToggle.textContent = "About & privacy";
   elements.chatForm.reset = () => {
     elements.prompt.value = "";
     elements.documentFile.value = "";
@@ -91,6 +97,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const authCalls = [];
   const uploadCalls = [];
   const fetchCalls = [];
+  const clipboardCalls = [];
   const deleteRequests = [];
   const confirmationMessages = [];
   let confirmResponse = true;
@@ -201,6 +208,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   };
   const context = vm.createContext({ document, window: {
     supabase: sdk,
+    navigator: { clipboard: { async writeText(value) { clipboardCalls.push(value); } } },
     matchMedia: () => ({ matches: mobileViewport }),
     confirm: message => { confirmationMessages.push(message); return confirmResponse; }
   }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
@@ -231,7 +239,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.sidebarToggle.listeners.get("click")[0]();
   elements.aboutToggle.listeners.get("click")[0]();
   assert.equal(elements.about.hidden, false, "About is revealed only after the explicit toggle");
-  assert.equal(elements.aboutToggle.textContent, "Hide About TMJ AI");
+  assert.equal(elements.aboutToggle.textContent, "Hide About & privacy");
   assert.equal(elements.aboutToggle.getAttribute("aria-expanded"), "true");
   assert.equal(bodyClasses.has("sidebar-open"), false, "opening About closes the mobile menu");
   elements.aboutToggle.listeners.get("click")[0]();
@@ -280,6 +288,11 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.prompt.value, "");
   assert.equal(elements.chatStatus.textContent, "", "new chat does not display a promotional success notice");
   assert.match(elements.messages.innerHTML, /What are you studying today\?/);
+  const starterButton = new ElementMock("button");
+  starterButton.setAttribute("data-starter-prompt", "Explain a difficult concept from my module in plain language and give one example.");
+  elements.messages.listeners.get("click")[0]({ target: { closest: () => starterButton } });
+  assert.equal(elements.prompt.value, starterButton.getAttribute("data-starter-prompt"), "starter chips fill the composer without auto-sending");
+  assert.equal(fetchCalls.filter(call => call.url === "/api/chat").length, 0);
 
   elements.prompt.value = "Explain a first-year biology concept.";
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
@@ -336,7 +349,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.match(chatCall.options.headers.Authorization, /^Bearer test-token$/);
   const assistant = elements.messages.children.at(-1);
   assert.match(assistant.textContent, /Academic integrity is supported/);
-  assert.equal(assistant.children.length, 1, "citations are appended separately from the AI answer text");
+  assert.equal(assistant.children.length, 2, "citations and accessible answer actions are separate from the AI answer text");
   const sourceSection = assistant.children[0];
   const referencesList = sourceSection.children.find(child => child.id === "ul");
   assert.ok(referencesList);
@@ -344,12 +357,22 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.match(sourceSection.children.at(-1).textContent, /Search NWU’s public website/);
   assert.doesNotMatch(assistant.textContent, /No sources available|Source notes:\s*None/i);
   assert.doesNotMatch(assistant.className, /developer-answer/, "ordinary academic answers do not render the developer profile");
+  const answerActions = assistant.children[1];
+  const copyButton = answerActions.children.find(child => child.className === "answer-action-button answer-copy");
+  await copyButton.listeners.get("click")[0]();
+  assert.equal(clipboardCalls[0], "Academic integrity is supported by the current NWU rules.");
+  assert.equal(copyButton.textContent, "Copied");
+  const ratingButtons = answerActions.children.filter(child => child.className === "answer-action-button answer-feedback-button");
+  ratingButtons[0].listeners.get("click")[0]();
+  assert.equal(ratingButtons[0].getAttribute("aria-pressed"), "true");
+  assert.equal(ratingButtons[1].getAttribute("aria-pressed"), "false");
+  assert.match(answerActions.children.find(child => child.className === "answer-feedback-status").textContent, /not sent to TMJ/);
 
   elements.prompt.value = "Who developed TMJ AI Agent?";
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
   const developerAnswer = elements.messages.children.at(-1);
   assert.equal(developerAnswer.className, "message assistant developer-answer");
-  assert.equal(developerAnswer.children.length, 1);
+  assert.equal(developerAnswer.children.length, 2, "developer cards retain copy and feedback actions without changing the on-demand profile");
   const profileCard = developerAnswer.children[0];
   assert.equal(profileCard.className, "developer-profile-card");
   const descendants = root => [root, ...root.children.flatMap(descendants)];
