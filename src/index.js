@@ -85,9 +85,83 @@ EVIDENCE AND ACCURACY:
 const CHAT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 const EMBEDDING_DIMENSIONS = 384;
-const MAX_DOCUMENT_CHUNKS = 80;
+export const DAILY_CHAT_LIMIT = 8;
+export const GLOBAL_DAILY_CHAT_LIMIT = 80;
+export const DAILY_UPLOAD_LIMIT = 1;
+export const MAX_DAILY_USERS = 10;
+export const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+export const MAX_DOCUMENT_CHUNKS = 20;
+const MAX_DOCUMENT_TEXT_CHARS = 25_000;
 const MAX_NWU_CHUNKS = 100;
 const MAX_CONTEXT_CHARS = 15_000;
+export const DAILY_LIMIT_MESSAGE = "You've reached today's daily limit. Please come back tomorrow; access resets at 02:00 South African time.";
+export const DAILY_UPLOAD_LIMIT_MESSAGE = "You've reached today's document upload limit. Please come back tomorrow; uploads reset at 02:00 South African time.";
+
+const DAILY_USAGE_STATUS_QUERY = `
+  SELECT
+    COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_chat_count,
+    COALESCE((SELECT upload_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_count,
+    COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS global_chat_count,
+    CASE WHEN EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2) THEN 1 ELSE 0 END AS user_active,
+    (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) AS active_users_count
+`;
+
+const DAILY_USAGE_CONSUME_QUERY = `
+  INSERT INTO daily_usage (usage_date, user_id, chat_count, upload_count)
+  SELECT ?1, ?2,
+    CASE WHEN ?3 = 'chat' THEN 1 ELSE 0 END,
+    CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END
+  WHERE (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5
+    AND (EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2)
+      OR (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) < ?7)
+    AND COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?4
+    AND (?3 = 'chat' OR COALESCE((SELECT upload_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?6)
+  ON CONFLICT (usage_date, user_id) DO UPDATE SET
+    chat_count = daily_usage.chat_count + CASE WHEN ?3 = 'chat' THEN 1 ELSE 0 END,
+    upload_count = daily_usage.upload_count + CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END
+  WHERE (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5
+    AND daily_usage.chat_count < ?4
+    AND (?3 = 'chat' OR daily_usage.upload_count < ?6)
+  RETURNING chat_count, upload_count
+`;
+
+export function utcUsageDay(now = new Date()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+export function nextUtcResetAt(now = new Date()) {
+  const date = new Date(now);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)).toISOString();
+}
+
+export async function getDailyUsageStatus(database, userId, now = new Date()) {
+  if (!database || typeof database.prepare !== "function") throw new Error("Daily usage database is not configured.");
+  const day = utcUsageDay(now);
+  const row = await database.prepare(DAILY_USAGE_STATUS_QUERY).bind(day, String(userId)).first();
+  const userChats = Number(row?.user_chat_count || 0);
+  const userUploads = Number(row?.user_upload_count || 0);
+  const globalChats = Number(row?.global_chat_count || 0);
+  const userActive = Number(row?.user_active || 0) > 0;
+  const activeUsers = Number(row?.active_users_count || 0);
+  const canJoinPilot = userActive || activeUsers < MAX_DAILY_USERS;
+  const chatAllowed = canJoinPilot && userChats < DAILY_CHAT_LIMIT && globalChats < GLOBAL_DAILY_CHAT_LIMIT;
+  const uploadAllowed = chatAllowed && userUploads < DAILY_UPLOAD_LIMIT;
+  return {
+    chatAllowed,
+    uploadAllowed,
+    resetAt: chatAllowed && uploadAllowed ? null : nextUtcResetAt(now)
+  };
+}
+
+export async function consumeDailyUsage(database, userId, kind, now = new Date()) {
+  if (!database || typeof database.prepare !== "function") throw new Error("Daily usage database is not configured.");
+  if (kind !== "chat" && kind !== "upload") throw new Error("Unknown daily usage type.");
+  const day = utcUsageDay(now);
+  const row = await database.prepare(DAILY_USAGE_CONSUME_QUERY)
+    .bind(day, String(userId), kind, DAILY_CHAT_LIMIT, GLOBAL_DAILY_CHAT_LIMIT, DAILY_UPLOAD_LIMIT, MAX_DAILY_USERS)
+    .first();
+  return { allowed: Boolean(row), resetAt: row ? null : nextUtcResetAt(now) };
+}
 
 export default {
   async fetch(request, env) {
@@ -96,15 +170,17 @@ export default {
       if (request.method !== "GET") return json(405, { error: "Method not allowed" });
       const supabaseReady = Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
       const aiReady = Boolean(env.AI && typeof env.AI.run === "function");
-      const chatReady = Boolean(supabaseReady && aiReady);
+      const dailyUsageReady = Boolean(env.USAGE_DB && typeof env.USAGE_DB.prepare === "function");
+      const chatReady = Boolean(supabaseReady && aiReady && dailyUsageReady);
       const indexingReady = Boolean(chatReady && env.SUPABASE_SERVICE_ROLE_KEY);
       const nwuIngestionReady = Boolean(env.NWU_INGEST_SECRET && aiReady && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
       return json(200, {
         status: "ok",
         ready: chatReady && indexingReady,
-        services: { ai: aiReady, chat: chatReady, documentIndexing: indexingReady, nwuIngestion: nwuIngestionReady }
+        services: { ai: aiReady, chat: chatReady, documentIndexing: indexingReady, nwuIngestion: nwuIngestionReady, dailyUsage: dailyUsageReady }
       });
     }
+    if (url.pathname === "/api/usage") return handleUsageStatus(request, env);
     if (url.pathname === "/api/chat") return handleChat(request, env);
     if (url.pathname === "/api/index-document") return handleDocumentIndex(request, env);
     if (url.pathname === "/api/index-nwu") return handleNwuIndex(request, env);
@@ -125,15 +201,44 @@ async function authenticate(request, env) {
   return { client, user: data.user, token };
 }
 
+async function handleUsageStatus(request, env) {
+  if (request.method !== "GET") return json(405, { error: "Method not allowed" });
+  if (!env.USAGE_DB || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    return json(503, { error: "Daily usage service is not configured." });
+  }
+  const auth = await authenticate(request, env);
+  if (auth.error) return auth.error;
+  try {
+    const status = await getDailyUsageStatus(env.USAGE_DB, auth.user.id);
+    return json(200, {
+      chatAllowed: status.chatAllowed,
+      uploadAllowed: status.uploadAllowed,
+      ...(status.resetAt ? { resetAt: status.resetAt } : {})
+    });
+  } catch {
+    return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+}
+
 async function handleChat(request, env) {
   if (request.method !== "POST") return json(405, { error: "Method not allowed" });
-  if (!env.AI || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return json(503, { error: "Cloudflare AI or database service is not configured." });
+  if (!env.AI || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.USAGE_DB) return json(503, { error: "Cloudflare AI, database, or daily usage service is not configured." });
   const auth = await authenticate(request, env);
   if (auth.error) return auth.error;
   let body;
   try { body = await request.json(); } catch { return json(400, { error: "Invalid JSON" }); }
   const message = String(body.message || "").trim();
   if (!message || message.length > 8000) return json(400, { error: "Please provide an academic question under 8000 characters." });
+
+  let usage;
+  try {
+    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "chat");
+  } catch {
+    return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+  if (!usage.allowed) {
+    return json(429, { error: DAILY_LIMIT_MESSAGE, code: "DAILY_LIMIT_REACHED", resetAt: usage.resetAt });
+  }
 
   const developerIdentity = getDeveloperIdentityResponse(message);
   const identityReply = developerIdentity?.reply || null;
@@ -275,7 +380,7 @@ async function handleDeleteConversation(request, env, conversationId) {
 
 async function handleDocumentIndex(request, env) {
   if (request.method !== "POST") return json(405, { error: "Method not allowed" });
-  if (!env.AI || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.SUPABASE_SERVICE_ROLE_KEY) return json(503, { error: "Cloudflare AI or document indexing service is not configured." });
+  if (!env.AI || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY || !env.SUPABASE_SERVICE_ROLE_KEY || !env.USAGE_DB) return json(503, { error: "Cloudflare AI, document indexing, or daily usage service is not configured." });
   const auth = await authenticate(request, env);
   if (auth.error) return auth.error;
   let body;
@@ -287,11 +392,27 @@ async function handleDocumentIndex(request, env) {
   if (!path || !fileName || !path.startsWith(auth.user.id + "/")) return json(400, { error: "Invalid document path." });
   if (!isSupportedDocument(fileName)) return json(400, { error: "Supported files are PDF, DOCX, TXT and MD." });
 
+  let initialUsageStatus;
+  try {
+    initialUsageStatus = await getDailyUsageStatus(env.USAGE_DB, auth.user.id);
+  } catch {
+    return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+  if (!initialUsageStatus.uploadAllowed) {
+    if (!initialUsageStatus.chatAllowed) {
+      return json(429, { error: DAILY_LIMIT_MESSAGE, code: "DAILY_LIMIT_REACHED", resetAt: initialUsageStatus.resetAt });
+    }
+    return json(429, { error: DAILY_UPLOAD_LIMIT_MESSAGE, code: "DAILY_UPLOAD_LIMIT_REACHED", resetAt: initialUsageStatus.resetAt });
+  }
+
   const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
   const download = await admin.storage.from("tmj-documents").download(path);
   if (download.error) return json(404, { error: "Uploaded document could not be read." });
 
   const buffer = Buffer.from(await download.data.arrayBuffer());
+  if (buffer.byteLength > MAX_DOCUMENT_BYTES) {
+    return json(413, { error: "Maximum document size is 2 MiB.", code: "UPLOAD_TOO_LARGE" });
+  }
   let text = "";
   try {
     if (/\.pdf$/i.test(fileName)) text = (await pdfParse(buffer)).text;
@@ -302,24 +423,58 @@ async function handleDocumentIndex(request, env) {
   }
   text = normalizeExtractedText(text);
   if (text.length < 30) return json(422, { error: "No usable text was found in the document." });
+  if (text.length > MAX_DOCUMENT_TEXT_CHARS) {
+    return json(413, { error: "This document contains too much text. Split it into smaller files (maximum 20 extracted chunks).", code: "DOCUMENT_TOO_LONG" });
+  }
 
   const chunks = chunkText(text, 1400, 200);
-  if (chunks.length > MAX_DOCUMENT_CHUNKS) return json(413, { error: "Document is too large for one free-quota indexing operation. Split it into smaller files." });
+  if (chunks.length > MAX_DOCUMENT_CHUNKS) {
+    return json(413, { error: "This document contains too much text. Split it into smaller files (maximum 20 extracted chunks).", code: "DOCUMENT_TOO_LONG" });
+  }
 
+  let usage;
+  try {
+    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "upload");
+  } catch {
+    return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+  if (!usage.allowed) {
+    let status;
+    try {
+      status = await getDailyUsageStatus(env.USAGE_DB, auth.user.id);
+    } catch {
+      return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+    }
+    if (!status.chatAllowed) {
+      return json(429, { error: DAILY_LIMIT_MESSAGE, code: "DAILY_LIMIT_REACHED", resetAt: status.resetAt });
+    }
+    return json(429, {
+      error: DAILY_UPLOAD_LIMIT_MESSAGE,
+      code: "DAILY_UPLOAD_LIMIT_REACHED",
+      resetAt: status.resetAt
+    });
+  }
+
+  const embeddings = [];
+  for (let i = 0; i < chunks.length; i += 20) {
+    const batch = chunks.slice(i, i + 20);
+    const embedding = await embedMany(batch, env);
+    if (!embedding.ok) return json(embedding.status, { error: embedding.error });
+    embeddings.push(...embedding.embeddings);
+  }
   const { data: doc, error: docError } = await admin.from("documents").insert({
     user_id: auth.user.id, file_name: fileName, storage_path: path, module_code: moduleCode || null, source_type: "student_upload"
   }).select("id").single();
   if (docError) return json(500, { error: "Could not register the document: " + docError.message });
 
-  const rows = [];
-  for (let i = 0; i < chunks.length; i += 20) {
-    const batch = chunks.slice(i, i + 20);
-    const embedding = await embedMany(batch, env);
-    if (!embedding.ok) return json(embedding.status, { error: embedding.error });
-    batch.forEach((content, j) => rows.push({ document_id: doc.id, user_id: auth.user.id, chunk_index: i + j, content, embedding_cloudflare: embedding.embeddings[j] }));
-  }
+  const rows = chunks.map((content, index) => ({
+    document_id: doc.id, user_id: auth.user.id, chunk_index: index, content, embedding_cloudflare: embeddings[index]
+  }));
   const { error: chunkError } = await admin.from("document_chunks").insert(rows);
-  if (chunkError) return json(500, { error: "Could not save document embeddings: " + chunkError.message });
+  if (chunkError) {
+    await admin.from("documents").delete().eq("id", doc.id).eq("user_id", auth.user.id);
+    return json(500, { error: "Could not save document embeddings: " + chunkError.message });
+  }
   return json(200, { ok: true, message: "Document indexed successfully. TMJ AI can now use it for your academic questions.", chunks: chunks.length });
 }
 
