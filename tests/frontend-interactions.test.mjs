@@ -91,6 +91,13 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const authCalls = [];
   const uploadCalls = [];
   const fetchCalls = [];
+  const deleteRequests = [];
+  const confirmationMessages = [];
+  let confirmResponse = true;
+  let savedConversations = [
+    { id: "conversation-1", title: "Biology study" },
+    { id: "conversation-2", title: "Research methods" }
+  ];
   const sdk = {
     createClient: (_url, _key, options) => {
       clientOptions = options;
@@ -113,7 +120,14 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
             return { async upload(path, file, options) { uploadCalls.push({ bucket, path, file, options }); return { error: null }; } };
           }
         },
-        from() {
+        from(table) {
+          if (table === "conversations") {
+            return {
+              select() { return this; },
+              order() { return this; },
+              async limit() { return { data: savedConversations.map(conversation => ({ ...conversation })), error: null }; }
+            };
+          }
           const query = {
             select() { return this; },
             order() { return this; },
@@ -134,6 +148,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   };
   const fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
+    if (url.startsWith("/api/conversations/")) {
+      const id = url.slice("/api/conversations/".length);
+      deleteRequests.push({ url, options });
+      savedConversations = savedConversations.filter(conversation => conversation.id !== id);
+      return { ok: true, status: 200, json: async () => ({ ok: true, id }) };
+    }
     if (url === "/api/index-document") return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
     if (url === "/api/chat") return {
       ok: true,
@@ -147,7 +167,11 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     };
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
-  const context = vm.createContext({ document, window: { supabase: sdk, matchMedia: () => ({ matches: mobileViewport }) }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
+  const context = vm.createContext({ document, window: {
+    supabase: sdk,
+    matchMedia: () => ({ matches: mobileViewport }),
+    confirm: message => { confirmationMessages.push(message); return confirmResponse; }
+  }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
 
   // Supabase's UMD script exposes a classic global binding named `supabase`.
   vm.runInContext("var supabase = window.supabase;", context);
@@ -287,6 +311,30 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(referencesList.children[0].children[0].href, "https://www.nwu.ac.za/published-rules.pdf");
   assert.match(sourceSection.children.at(-1).textContent, /Search NWU’s public website/);
   assert.doesNotMatch(assistant.textContent, /No sources available|Source notes:\s*None/i);
+
+  assert.equal(elements.conversationList.children.length, 2, "signed-in history renders each recent conversation after refresh");
+  const firstConversationRow = elements.conversationList.children[0];
+  assert.equal(firstConversationRow.className, "conversation-row");
+  assert.equal(firstConversationRow.children.length, 2, "each history row ends with a separate Delete button");
+  assert.equal(firstConversationRow.children[1].className, "delete-conversation");
+  assert.equal(firstConversationRow.children[1].textContent, "Delete");
+  assert.equal(firstConversationRow.children[1].getAttribute("aria-label"), "Delete conversation: Biology study");
+  const deleteButton = elements.conversationList.children[0].children[1];
+  const clickEvent = { preventDefault() {}, stopPropagation() {} };
+  confirmResponse = false;
+  await deleteButton.listeners.get("click")[0](clickEvent);
+  assert.equal(deleteRequests.length, 0, "canceling the confirmation leaves the conversation intact");
+  assert.equal(elements.conversationList.children.length, 2);
+  confirmResponse = true;
+  await deleteButton.listeners.get("click")[0](clickEvent);
+  assert.match(confirmationMessages[0], /delete this conversation and all its messages/i);
+  assert.equal(deleteRequests.length, 1);
+  assert.equal(deleteRequests[0].url, "/api/conversations/conversation-1");
+  assert.equal(deleteRequests[0].options.method, "DELETE");
+  assert.equal(deleteRequests[0].options.headers.Authorization, "Bearer test-token");
+  assert.equal(elements.conversationList.children.length, 1, "successful deletion refreshes the history list");
+  assert.equal(elements.conversationList.children[0].children[0].textContent, "Research methods");
+  assert.match(elements.messages.innerHTML, /What are you studying today\?/, "deleting the open conversation clears it from the chat view");
 
   authStateListener("SIGNED_OUT", null);
   await Promise.resolve();

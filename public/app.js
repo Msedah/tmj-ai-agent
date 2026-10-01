@@ -484,6 +484,36 @@ chatForm.addEventListener("submit", async (event) => {
   }
 });
 
+async function deleteConversation(id, button) {
+  if (!session || !id) return;
+  const message = "Delete this conversation and all its messages? This cannot be undone.";
+  if (typeof window.confirm === "function" && !window.confirm(message)) return;
+
+  button.disabled = true;
+  button.textContent = "Deleting…";
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${session.access_token}` }
+    });
+    const data = await readJson(response);
+    if (!response.ok) throw new Error(data.error || `Could not delete this conversation (${response.status}).`);
+
+    if (currentConversation?.id === id) {
+      currentConversation = null;
+      $("messages").replaceChildren();
+      renderWelcome();
+    }
+    setStatus(chatStatus, "Conversation deleted.", "success");
+    await loadConversations();
+  } catch (error) {
+    setStatus(chatStatus, error?.message || "Could not delete this conversation. Please try again.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Delete";
+  }
+}
+
 async function loadConversations() {
   if (!supabaseClient || !session) return;
   try {
@@ -501,12 +531,35 @@ async function loadConversations() {
       return;
     }
     for (const conversation of data) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "conversation";
-      item.textContent = conversation.title || "New conversation";
-      item.addEventListener("click", () => loadConversation(conversation.id));
-      list.appendChild(item);
+      const row = document.createElement("div");
+      row.className = "conversation-row";
+      row.setAttribute("role", "listitem");
+
+      const title = conversation.title || "New conversation";
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "conversation";
+      openButton.textContent = title;
+      openButton.setAttribute("aria-label", `Open conversation: ${title}`);
+      openButton.addEventListener("click", () => {
+        setSidebarOpen(false);
+        loadConversation(conversation.id);
+      });
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "delete-conversation";
+      deleteButton.textContent = "Delete";
+      deleteButton.setAttribute("aria-label", `Delete conversation: ${title}`);
+      deleteButton.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        return deleteConversation(conversation.id, deleteButton);
+      });
+
+      row.appendChild(openButton);
+      row.appendChild(deleteButton);
+      list.appendChild(row);
     }
   } catch {
     $("conversationList").innerHTML = '<p class="status">Could not load conversations. Please refresh or sign in again.</p>';
