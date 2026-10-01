@@ -168,6 +168,17 @@ a { color: inherit; }
 .message { width: fit-content; max-width: min(84%, 720px); margin: 0 0 14px; padding: 12px 15px; border-radius: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.user { margin-left: auto; color: #fff; background: var(--green); border-bottom-right-radius: 5px; }
 .message.assistant { color: #27363c; background: #f4f5f6; border: 1px solid #eaebed; border-bottom-left-radius: 5px; }
+.message.assistant.developer-answer { width: min(100%, 640px); max-width: 100%; padding: 8px; background: transparent; border: 0; }
+.developer-profile-card { width: 100%; overflow: hidden; color: var(--ink); background: #fff; border: 1px solid #dfe7e3; border-radius: 16px; box-shadow: 0 5px 18px rgba(30, 42, 50, 0.07); white-space: normal; }
+.developer-profile-photo { display: block; width: 100%; height: clamp(240px, 45vw, 380px); object-fit: contain; object-position: center; background: #edf3ef; }
+.developer-profile-body { display: grid; gap: 5px; padding: 16px 18px 18px; }
+.developer-profile-kicker { margin: 0 0 1px; color: var(--green); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
+.developer-profile-name { margin: 0; color: #202a31; font-size: 1.2rem; font-weight: 750; letter-spacing: -0.025em; line-height: 1.2; }
+.developer-profile-role { margin: 0 0 4px; color: #60716e; font-size: 0.82rem; font-weight: 650; }
+.developer-profile-full-name, .developer-profile-initials, .developer-profile-location { margin: 0; color: #56636a; font-size: 0.82rem; line-height: 1.45; }
+.developer-profile-contacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.developer-contact-link { min-height: 38px; display: inline-flex; align-items: center; padding: 8px 11px; color: var(--green-dark); background: #f0f7f3; border: 1px solid #dcebe3; border-radius: 9px; font-size: 0.79rem; font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
+.developer-contact-link:hover { background: #e5f1eb; border-color: #c8ded2; }
 .message-sources { margin-top: 12px; padding-top: 10px; border-top: 1px solid #dfe3e4; white-space: normal; }
 .sources-heading { margin: 0 0 5px; color: #59676d; font-size: 0.75rem; font-weight: 750; }
 .message-sources ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: #59676d; font-size: 0.76rem; }

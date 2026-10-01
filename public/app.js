@@ -196,12 +196,117 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
   answer.appendChild(section);
 }
 
-function addMessage(role, text, sources = [], nwuSearchUrl = "") {
+function normalizeDeveloperProfile(value) {
+  if (!value || typeof value !== "object") return null;
+  const name = String(value.name || "").trim();
+  const fullName = String(value.fullName || "").trim();
+  const initialsMeaning = String(value.initialsMeaning || "").trim();
+  const role = String(value.role || "").trim();
+  const location = String(value.location || "").trim();
+  const email = String(value.email || "").trim();
+  const phone = String(value.phone || "").trim();
+  const phoneDigits = phone.replace(/\D/g, "");
+  if (!name || !fullName || !initialsMeaning || !role || !location ||
+      name.length > 100 || fullName.length > 140 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      !/^0\d{9}$/.test(phoneDigits)) return null;
+  return {
+    name,
+    fullName,
+    initialsMeaning,
+    role,
+    location,
+    email,
+    phone,
+    phoneHref: `tel:+27${phoneDigits.slice(1)}`,
+    photoUrl: value.photoUrl === "/developer-tj.webp" ? value.photoUrl : "/developer-tj.webp",
+    photoAlt: String(value.photoAlt || `Photo of ${name}, developer of TMJ AI Agent`).slice(0, 180)
+  };
+}
+
+function parseDeveloperProfileReply(text) {
+  const lines = String(text || "").trim().split(/\r?\n/);
+  if (lines[0]?.trim().toLowerCase() !== "developer profile") return null;
+  const fields = new Map();
+  for (const line of lines.slice(1)) {
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (match) fields.set(match[1].trim().toLowerCase(), match[2].trim());
+  }
+  return normalizeDeveloperProfile({
+    name: fields.get("name"),
+    fullName: fields.get("full name"),
+    initialsMeaning: fields.get("tj stands for"),
+    role: fields.get("role"),
+    location: fields.get("location"),
+    email: fields.get("email"),
+    phone: fields.get("phone"),
+    photoUrl: "/developer-tj.webp"
+  });
+}
+
+function appendProfileText(parent, tagName, className, text) {
+  const node = document.createElement(tagName);
+  node.className = className;
+  node.textContent = String(text || "");
+  parent.appendChild(node);
+  return node;
+}
+
+function appendDeveloperProfileCard(answer, candidate) {
+  const profile = normalizeDeveloperProfile(candidate);
+  if (!profile) return false;
+
+  const card = document.createElement("article");
+  card.className = "developer-profile-card";
+  card.setAttribute("aria-label", "Developer profile");
+
+  const photo = document.createElement("img");
+  photo.className = "developer-profile-photo";
+  photo.src = profile.photoUrl;
+  photo.alt = profile.photoAlt;
+  photo.loading = "lazy";
+  card.appendChild(photo);
+
+  const body = document.createElement("div");
+  body.className = "developer-profile-body";
+  appendProfileText(body, "p", "developer-profile-kicker", "Developer identity");
+  appendProfileText(body, "h3", "developer-profile-name", profile.name);
+  appendProfileText(body, "p", "developer-profile-role", profile.role);
+  appendProfileText(body, "p", "developer-profile-full-name", `Full name: ${profile.fullName}`);
+  appendProfileText(body, "p", "developer-profile-initials", profile.initialsMeaning);
+  appendProfileText(body, "p", "developer-profile-location", `Location: ${profile.location}`);
+
+  const contacts = document.createElement("div");
+  contacts.className = "developer-profile-contacts";
+  contacts.setAttribute("role", "group");
+  contacts.setAttribute("aria-label", "Contact the developer");
+  const emailLink = document.createElement("a");
+  emailLink.className = "developer-contact-link";
+  emailLink.href = `mailto:${profile.email}`;
+  emailLink.textContent = profile.email;
+  emailLink.setAttribute("aria-label", `Email ${profile.name}`);
+  contacts.appendChild(emailLink);
+  const phoneLink = document.createElement("a");
+  phoneLink.className = "developer-contact-link";
+  phoneLink.href = profile.phoneHref;
+  phoneLink.textContent = profile.phone;
+  phoneLink.setAttribute("aria-label", `Call ${profile.phone}`);
+  contacts.appendChild(phoneLink);
+  body.appendChild(contacts);
+  card.appendChild(body);
+  answer.appendChild(card);
+  return true;
+}
+
+function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfile = null) {
+  const profile = role === "assistant"
+    ? (normalizeDeveloperProfile(developerProfile) || parseDeveloperProfileReply(text))
+    : null;
   const element = document.createElement("div");
-  element.className = `message ${role}`;
-  element.textContent = text;
+  element.className = `message ${role}${profile ? " developer-answer" : ""}`;
+  if (profile) appendDeveloperProfileCard(element, profile);
+  else element.textContent = text;
   element.setAttribute("role", role === "assistant" ? "status" : "note");
-  if (role === "assistant") appendAssistantSources(element, sources, nwuSearchUrl);
+  if (role === "assistant" && !profile) appendAssistantSources(element, sources, nwuSearchUrl);
   $("messages").appendChild(element);
   $("messages").scrollTop = $("messages").scrollHeight;
   return element;
@@ -464,8 +569,16 @@ chatForm.addEventListener("submit", async (event) => {
         return;
       }
 
-      answer.textContent = data.reply || "No response was returned.";
-      appendAssistantSources(answer, data.sources, data.nwuSearchUrl);
+      const developerProfile = normalizeDeveloperProfile(data.developerProfile) || parseDeveloperProfileReply(data.reply);
+      answer.replaceChildren();
+      if (developerProfile) {
+        answer.className = "message assistant developer-answer";
+        appendDeveloperProfileCard(answer, developerProfile);
+      } else {
+        answer.className = "message assistant";
+        answer.textContent = data.reply || "No response was returned.";
+        appendAssistantSources(answer, data.sources, data.nwuSearchUrl);
+      }
       if (data.conversationId) currentConversation = { id: data.conversationId };
       $("prompt").value = "";
       updateComposerLabel();
