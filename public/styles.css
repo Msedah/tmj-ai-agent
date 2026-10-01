@@ -152,6 +152,8 @@ a { color: inherit; }
 .status:empty { display: none; }
 .status[data-kind="info"] { color: #5c6b73; }
 .status[data-kind="success"] { color: var(--green-dark); }
+.status[data-kind="limit"] { color: #7b430e; font-weight: 700; }
+.status[data-kind="usage"] { color: #7b430e; font-weight: 650; }
 
 .chat-panel { width: min(980px, 100%); min-height: calc(100vh - 70px); min-height: calc(100dvh - 70px); margin: 0 auto; padding: 0 clamp(18px, 4vw, 48px); display: flex; flex: 1 0 auto; flex-direction: column; }
 .messages { width: 100%; min-height: 440px; max-height: calc(100dvh - 245px); flex: 1 1 auto; display: flex; flex-direction: column; overflow: auto; padding: 28px 8px 22px; scroll-behavior: smooth; }
@@ -197,6 +199,7 @@ a { color: inherit; }
 .attachment-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .attach-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; color: #4f5d63; background: #fff; border: 1px solid #d9dfe2; border-radius: 9px; font-size: 0.8rem; font-weight: 650; cursor: pointer; }
 .attach-button:hover { color: var(--green-dark); background: #f3f8f5; border-color: #bdd5cc; }
+.attach-button:disabled { opacity: 0.55; cursor: not-allowed; }
 .attachment-preview { max-width: min(280px, 46vw); display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; color: #43535a; background: #f1f6f3; border: 1px solid #dce9e2; border-radius: 8px; font-size: 0.74rem; }
 .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remove-attachment { flex: 0 0 auto; padding: 2px 4px; color: #68767d; background: transparent; border: 0; font-size: 0.7rem; font-weight: 650; cursor: pointer; }
@@ -206,7 +209,7 @@ a { color: inherit; }
 .send-button, .button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 13px; color: #fff; background: var(--green); border: 1px solid transparent; border-radius: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; transition: background 150ms ease, transform 150ms ease; }
 .send-button:hover:not(:disabled), .button:hover:not(:disabled) { background: var(--green-dark); }
 .send-button:active:not(:disabled), .button:active:not(:disabled) { transform: translateY(1px); }
-.send-button:disabled, .button:disabled { opacity: 0.55; cursor: wait; }
+.send-button:disabled, .button:disabled { opacity: 0.55; cursor: not-allowed; }
 .send-button span:last-child { width: 21px; height: 21px; display: grid; place-items: center; color: var(--green); background: #fff; border-radius: 7px; font-size: 1rem; }
 .chat-status { padding: 0 6px; }
 .disclaimer { max-width: 760px; margin: 9px auto 16px; padding: 0 6px; color: #75817d; font-size: 0.72rem; text-align: center; }
@@ -264,7 +267,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .composer-bottom { align-items: flex-end; gap: 6px; }
   .attachment-controls { gap: 5px; }
   .attachment-preview { max-width: 40vw; }
-  .upload-hint { display: none; }
+  .upload-hint { flex-basis: 100%; display: block; font-size: 0.64rem; }
 }
 @media (max-width: 480px) {
   .study-pill { padding: 5px 8px; font-size: 0.67rem; }

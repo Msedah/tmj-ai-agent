@@ -22,9 +22,14 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(markup, /<section id="about"[^>]*hidden>/);
   assert.match(markup, /src="\/tmj-mark\.svg"/);
   assert.match(markup, /class="starter-prompt"/);
+  assert.match(markup, /max 2 MiB/);
+  assert.match(markup, /one document per day/);
   assert.match(markup, /independent study aid, not an official NWU service/i);
   assert.match(markup, /Deleting a conversation does not delete its uploaded file or indexed text/i);
   assert.match(markup, /Cloudflare Workers AI/);
+  assert.match(markup, /daily usage counter linked to your account/i);
+  assert.match(markup, /not question text or an AI-points balance/i);
+  assert.match(markup, /00:00 UTC \(02:00 South African time\)/);
   assert.match(markup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
   assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
@@ -96,6 +101,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   let clientOptions;
   const authCalls = [];
   const uploadCalls = [];
+  const removeCalls = [];
   const fetchCalls = [];
   const clipboardCalls = [];
   const deleteRequests = [];
@@ -106,6 +112,9 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     { id: "conversation-2", title: "Research methods" }
   ];
   let savedMessages = [];
+  let usageSnapshot = { chatAllowed: true, uploadAllowed: true };
+  let rejectNextIndex = false;
+  let failUsageCheck = false;
   const sdk = {
     createClient: (_url, _key, options) => {
       clientOptions = options;
@@ -125,7 +134,10 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
         },
         storage: {
           from(bucket) {
-            return { async upload(path, file, options) { uploadCalls.push({ bucket, path, file, options }); return { error: null }; } };
+            return {
+              async upload(path, file, options) { uploadCalls.push({ bucket, path, file, options }); return { error: null }; },
+              async remove(paths) { removeCalls.push({ bucket, paths }); return { data: paths, error: null }; }
+            };
           }
         },
         from(table) {
@@ -159,17 +171,31 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const document = {
     body: { classList: { toggle: (name, force) => force ? bodyClasses.add(name) : bodyClasses.delete(name), contains: name => bodyClasses.has(name) } },
     getElementById: id => elements[id] || null,
-    createElement: tag => new ElementMock(tag)
+    createElement: tag => new ElementMock(tag),
+    visibilityState: "visible",
+    addEventListener(name, handler) { (documentListeners.get(name) || documentListeners.set(name, []).get(name)).push(handler); }
   };
+  const windowListeners = new Map();
+  const documentListeners = new Map();
   const fetch = async (url, options = {}) => {
     fetchCalls.push({ url, options });
+    if (url === "/api/usage") return failUsageCheck
+      ? { ok: false, status: 503, json: async () => ({ error: "Could not check today's usage." }) }
+      : { ok: true, status: 200, json: async () => ({ ...usageSnapshot }) };
     if (url.startsWith("/api/conversations/")) {
       const id = url.slice("/api/conversations/".length);
       deleteRequests.push({ url, options });
       savedConversations = savedConversations.filter(conversation => conversation.id !== id);
       return { ok: true, status: 200, json: async () => ({ ok: true, id }) };
     }
-    if (url === "/api/index-document") return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
+    if (url === "/api/index-document") {
+      if (rejectNextIndex) {
+        rejectNextIndex = false;
+        return { ok: false, status: 413, json: async () => ({ error: "Maximum document size is 2 MiB.", code: "UPLOAD_TOO_LARGE" }) };
+      }
+      usageSnapshot = { ...usageSnapshot, uploadAllowed: false, resetAt: "2026-10-02T00:00:00.000Z" };
+      return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
+    }
     if (url === "/api/chat") {
       const question = JSON.parse(options.body || "{}").message || "";
       if (/developer|creator|created|developed/i.test(question)) return {
@@ -210,7 +236,10 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     supabase: sdk,
     navigator: { clipboard: { async writeText(value) { clipboardCalls.push(value); } } },
     matchMedia: () => ({ matches: mobileViewport }),
-    confirm: message => { confirmationMessages.push(message); return confirmResponse; }
+    confirm: message => { confirmationMessages.push(message); return confirmResponse; },
+    addEventListener(name, handler) { (windowListeners.get(name) || windowListeners.set(name, []).get(name)).push(handler); },
+    setTimeout: () => 1,
+    clearTimeout() {}
   }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
 
   // Supabase's UMD script exposes a classic global binding named `supabase`.
@@ -307,7 +336,9 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
 
   elements.authDialog.open = true;
   authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user", email: "averyveryverylongemailaddress@example.com" } });
-  await Promise.resolve();
+  assert.equal(elements.sendButton.disabled, true, "message sending waits until daily access can be checked");
+  assert.equal(elements.sendLabel.textContent, "Checking access…");
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.authDialog.open, false, "sign-in state closes an open auth dialog");
   assert.equal(elements.historyPanel.hidden, false);
   assert.equal(elements.historyToggle.hidden, false);
@@ -326,6 +357,11 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.prompt.listeners.get("input")[0]();
   elements.attachDocument.listeners.get("click")[0]();
   assert.equal(elements.documentFile.clickCount, 1, "attach button opens the native file picker");
+  elements.documentFile.files = [{ name: "too-large.pdf", size: 2 * 1024 * 1024 + 1, type: "application/pdf" }];
+  elements.documentFile.listeners.get("change")[0]();
+  assert.match(elements.uploadStatus.textContent, /Maximum file size is 2 MiB/);
+  assert.equal(uploadCalls.length, 0, "oversize files never leave the browser");
+  elements.attachDocument.listeners.get("click")[0]();
   elements.documentFile.files = [{ name: "PADM101.pdf", size: 2048, type: "application/pdf" }];
   elements.documentFile.listeners.get("change")[0]();
   assert.equal(elements.attachmentPreview.hidden, false);
@@ -334,13 +370,23 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.sendLabel.textContent, "Upload & index");
   elements.moduleCode.value = "padm101";
 
+  rejectNextIndex = true;
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
-  assert.equal(uploadCalls.length, 1, "attachment uploads to the private Supabase bucket");
+  assert.equal(uploadCalls.length, 1, "the first attempt uploads only the permitted-size document");
+  assert.equal(removeCalls.length, 1, "a rejected staged file is removed from private storage");
+  assert.match(elements.uploadStatus.textContent, /Maximum document size is 2 MiB/);
+  assert.equal(elements.attachmentPreview.hidden, false, "the user can retry after fixing or replacing a rejected file");
+
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(uploadCalls.length, 2, "the attachment can be retried in the private Supabase bucket");
   assert.equal(uploadCalls[0].bucket, "tmj-documents");
-  assert.equal(fetchCalls[0].url, "/api/index-document", "indexing runs from the same composer submit");
-  assert.equal(JSON.parse(fetchCalls[0].options.body).moduleCode, "PADM101");
+  const indexCall = fetchCalls.find(call => call.url === "/api/index-document");
+  assert.ok(indexCall, "indexing runs from the same composer submit");
+  assert.equal(JSON.parse(indexCall.options.body).moduleCode, "PADM101");
   assert.equal(elements.attachmentPreview.hidden, true, "successful indexing clears the attachment chip");
-  assert.match(elements.uploadStatus.textContent, /Document indexed successfully/);
+  assert.match(elements.uploadStatus.textContent, /Document indexed successfully.*upload another document tomorrow/);
+  assert.equal(elements.attachDocument.disabled, true, "the one-document-per-day cap disables further uploads");
+  assert.equal(elements.sendButton.disabled, false, "using the upload allowance does not block chat");
 
   elements.prompt.value = "What does NWU publish about academic integrity?";
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
@@ -392,6 +438,37 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(contactLinks[0].href, "mailto:mailulajosep@gmail.com");
   assert.equal(contactLinks[1].href, "tel:+27718452020");
 
+  usageSnapshot = { chatAllowed: false, uploadAllowed: false, resetAt: "2026-10-02T00:00:00.000Z" };
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.sendButton.disabled, true, "daily-limit refresh disables message sending");
+  assert.equal(elements.sendLabel.textContent, "Limit reached");
+  assert.match(elements.chatStatus.textContent, /reached today's daily limit.*come back tomorrow/i);
+  assert.doesNotMatch(elements.chatStatus.textContent, /points|neurons|tokens|8\/80/i, "the quota and point balances remain hidden");
+  const chatsBeforeLimitSubmit = fetchCalls.filter(call => call.url === "/api/chat").length;
+  elements.prompt.value = "This must not be sent after the limit.";
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(fetchCalls.filter(call => call.url === "/api/chat").length, chatsBeforeLimitSubmit);
+  elements.newChat.listeners.get("click")[0]();
+  assert.match(elements.chatStatus.textContent, /reached today's daily limit/i, "New chat does not hide the locked state");
+
+  usageSnapshot = { chatAllowed: true, uploadAllowed: true };
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.sendButton.disabled, false, "the next daily status check restores access");
+  assert.equal(elements.attachDocument.disabled, false);
+
+  failUsageCheck = true;
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.sendButton.disabled, true, "the UI fails closed when the quota service is unavailable");
+  assert.equal(elements.sendLabel.textContent, "Access unavailable", "a service outage is not mislabeled as an exhausted limit");
+  assert.match(elements.chatStatus.textContent, /Could not check today's usage/i);
+  failUsageCheck = false;
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.sendButton.disabled, false, "a successful status retry restores access after an outage");
+
   savedMessages = [
     { role: "user", content: "Who is the developer?" },
     { role: "assistant", content: "Developer profile\nName: TJ Mailula\nFull name: Tshepo Joseph Mailula\nTJ stands for: Tshepo Joseph\nRole: Developer and creator of TMJ AI Agent\nLocation: Tzaneen, Limpopo, South Africa\nEmail: mailulajosep@gmail.com\nPhone: 0718452020" }
@@ -424,7 +501,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.match(elements.messages.innerHTML, /What are you studying today\?/, "deleting the open conversation clears it from the chat view");
 
   authStateListener("SIGNED_OUT", null);
-  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.historyPanel.hidden, true, "history hides again on sign-out");
   assert.equal(elements.attachmentControls.hidden, true, "upload control hides again on sign-out");
   assert.equal(elements.accountIdentity.hidden, true);

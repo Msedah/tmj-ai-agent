@@ -8,6 +8,11 @@ let session = null;
 let currentConversation = null;
 let authMode = "signin";
 let historyVisible = true;
+let dailyUsage = null;
+let usageUserId = null;
+let usageCheckVersion = 0;
+let usageRefreshTimer = null;
+let isSubmitting = false;
 
 const $ = (id) => document.getElementById(id);
 const authDialog = $("authDialog");
@@ -19,8 +24,12 @@ const chatForm = $("chatForm");
 const chatStatus = $("chatStatus");
 const uploadStatus = $("uploadStatus");
 const attachmentControls = $("attachmentControls");
+const attachDocument = $("attachDocument");
 const documentFile = $("documentFile");
 const sendButton = $("sendButton");
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+const DAILY_LIMIT_MESSAGE = "You've reached today's daily limit. Please come back tomorrow; access resets at 02:00 South African time.";
+const UPLOAD_LIMIT_MESSAGE = "You've reached today's document upload limit. Please come back tomorrow; uploads reset at 02:00 South African time.";
 
 function setStatus(element, message, kind = "error") {
   if (!element) return;
@@ -126,6 +135,15 @@ function updateAuthUI() {
   }
   if (attachmentControls) attachmentControls.hidden = !session;
   if (!session) $("conversationList").replaceChildren();
+  const nextUsageUserId = session?.user?.id || null;
+  if (nextUsageUserId !== usageUserId) {
+    usageUserId = nextUsageUserId;
+    usageCheckVersion += 1;
+    clearUsageRefreshTimer();
+    dailyUsage = null;
+  }
+  updateComposerLabel();
+  if (session && !dailyUsage) void refreshDailyUsage();
 }
 
 function renderWelcome() {
@@ -405,10 +423,19 @@ function updateComposerLabel() {
   const hasFile = Boolean(documentFile?.files?.[0]);
   const hasQuestion = Boolean($("prompt")?.value.trim());
   const label = $("sendLabel");
-  if (label && !sendButton.disabled) {
-    label.textContent = hasFile ? (hasQuestion ? "Upload & ask" : "Upload & index") : "Ask TMJ AI";
+  const chatBlocked = Boolean(session && (!dailyUsage || !dailyUsage.chatAllowed));
+  const uploadBlocked = Boolean(session && (!dailyUsage || !dailyUsage.uploadAllowed));
+  const usagePending = Boolean(session && !dailyUsage);
+  const usageUnavailable = Boolean(session && dailyUsage?.unavailable);
+  const blockedLabel = usageUnavailable ? "Access unavailable" : (usagePending ? "Checking access…" : "Limit reached");
+  const blockedAriaLabel = usageUnavailable ? "Daily usage check unavailable" : (usagePending ? "Checking daily access" : "Daily message limit reached");
+  if (sendButton) sendButton.disabled = isSubmitting || chatBlocked;
+  if (attachDocument) attachDocument.disabled = uploadBlocked;
+  if (documentFile) documentFile.disabled = uploadBlocked;
+  if (label && !isSubmitting) {
+    label.textContent = chatBlocked ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload & index") : "Ask TMJ AI");
   }
-  if (sendButton) sendButton.setAttribute("aria-label", hasFile ? (hasQuestion ? "Upload document and ask question" : "Upload and index document") : "Send message");
+  if (sendButton) sendButton.setAttribute("aria-label", chatBlocked ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload document and ask question" : "Upload and index document") : "Send message"));
 }
 
 $("attachDocument").addEventListener("click", () => {
@@ -425,9 +452,9 @@ documentFile.addEventListener("change", () => {
     clearAttachment();
     return;
   }
-  if (file.size > 10 * 1024 * 1024) {
+  if (file.size > MAX_UPLOAD_BYTES) {
     clearAttachment();
-    setStatus(uploadStatus, "Maximum file size is 10 MB.");
+    setStatus(uploadStatus, "Maximum file size is 2 MiB.");
     return;
   }
   if (!/\.(pdf|docx|txt|md)$/i.test(file.name)) {
@@ -465,6 +492,78 @@ async function readJson(response) {
     return { error: `The server returned an unreadable response (${response.status}).` };
   }
 }
+
+function clearUsageRefreshTimer() {
+  if (usageRefreshTimer !== null) window.clearTimeout?.(usageRefreshTimer);
+  usageRefreshTimer = null;
+}
+
+function scheduleUsageRefresh(resetAt) {
+  clearUsageRefreshTimer();
+  const resetTime = Date.parse(String(resetAt || ""));
+  if (!Number.isFinite(resetTime) || typeof window.setTimeout !== "function") return;
+  const delay = Math.max(0, Math.min(resetTime - Date.now() + 500, 2_147_483_647));
+  usageRefreshTimer = window.setTimeout(() => {
+    usageRefreshTimer = null;
+    void refreshDailyUsage();
+  }, delay);
+}
+
+function applyDailyUsageStatus(payload) {
+  dailyUsage = {
+    chatAllowed: payload.chatAllowed === true,
+    uploadAllowed: payload.uploadAllowed === true,
+    resetAt: typeof payload.resetAt === "string" ? payload.resetAt : null
+  };
+  if (!dailyUsage.chatAllowed) {
+    setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+  } else if (chatStatus?.dataset?.kind === "limit" || chatStatus?.dataset?.kind === "usage") {
+    setStatus(chatStatus, "", "success");
+  }
+  if (dailyUsage.chatAllowed && !dailyUsage.uploadAllowed) {
+    setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+  } else if (uploadStatus?.dataset?.kind === "limit") {
+    setStatus(uploadStatus, "", "success");
+  }
+  scheduleUsageRefresh(dailyUsage.resetAt);
+  updateComposerLabel();
+}
+
+async function refreshDailyUsage() {
+  if (!session) {
+    dailyUsage = null;
+    updateComposerLabel();
+    return false;
+  }
+  const version = ++usageCheckVersion;
+  if (!dailyUsage) setStatus(chatStatus, "Checking today's daily access…", "info");
+  try {
+    const response = await fetch("/api/usage", {
+      headers: { Authorization: `Bearer ${session.access_token}` }
+    });
+    const payload = await readJson(response);
+    if (!response.ok || typeof payload.chatAllowed !== "boolean" || typeof payload.uploadAllowed !== "boolean") {
+      throw new Error(payload.error || "Could not check today's usage.");
+    }
+    if (version !== usageCheckVersion || !session) return false;
+    applyDailyUsageStatus(payload);
+    return true;
+  } catch {
+    if (version === usageCheckVersion && session) {
+      dailyUsage = { chatAllowed: false, uploadAllowed: false, resetAt: null, unavailable: true };
+      setStatus(chatStatus, "Could not check today's usage. Please try again shortly.", "usage");
+      updateComposerLabel();
+    }
+    return false;
+  }
+}
+
+window.addEventListener?.("focus", () => {
+  if (session) void refreshDailyUsage();
+});
+document.addEventListener?.("visibilitychange", () => {
+  if (session && document.visibilityState === "visible") void refreshDailyUsage();
+});
 
 async function ready() {
   updateAuthUI();
@@ -587,8 +686,10 @@ $("newChat").addEventListener("click", () => {
   chatForm.reset();
   clearAttachment();
   renderWelcome();
-  setStatus(chatStatus, "", "success");
-  setStatus(uploadStatus, "", "info");
+  if (session && dailyUsage && !dailyUsage.chatAllowed) setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+  else setStatus(chatStatus, "", "success");
+  if (session && dailyUsage?.chatAllowed && !dailyUsage.uploadAllowed) setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+  else setStatus(uploadStatus, "", "info");
   $("prompt").focus();
 });
 
@@ -606,8 +707,21 @@ chatForm.addEventListener("submit", async (event) => {
     $("prompt").focus();
     return;
   }
-  if (file && file.size > 10 * 1024 * 1024) {
-    setStatus(uploadStatus, "Maximum file size is 10 MB.");
+  if (!dailyUsage) await refreshDailyUsage();
+  if (dailyUsage?.unavailable) {
+    setStatus(chatStatus, "Could not check today's usage. Please try again shortly.", "usage");
+    return;
+  }
+  if (!dailyUsage?.chatAllowed) {
+    setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+    return;
+  }
+  if (file && !dailyUsage.uploadAllowed) {
+    setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+    return;
+  }
+  if (file && file.size > MAX_UPLOAD_BYTES) {
+    setStatus(uploadStatus, "Maximum file size is 2 MiB.");
     return;
   }
   if (file && !/\.(pdf|docx|txt|md)$/i.test(file.name)) {
@@ -615,7 +729,9 @@ chatForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  sendButton.disabled = true;
+  isSubmitting = true;
+  let stagedUploadPath = null;
+  updateComposerLabel();
   try {
     if (file) {
       $("sendLabel").textContent = "Uploading…";
@@ -626,6 +742,7 @@ chatForm.addEventListener("submit", async (event) => {
         upsert: false
       });
       if (upload.error) throw upload.error;
+      stagedUploadPath = path;
 
       const indexResponse = await fetch("/api/index-document", {
         method: "POST",
@@ -633,9 +750,30 @@ chatForm.addEventListener("submit", async (event) => {
         body: JSON.stringify({ storagePath: path, fileName: file.name, moduleCode: $("moduleCode").value.trim().toUpperCase() })
       });
       const indexData = await readJson(indexResponse);
-      if (!indexResponse.ok) throw new Error(indexData.error || `Indexing failed (${indexResponse.status}).`);
+      if (!indexResponse.ok) {
+        if (indexData.code === "DAILY_LIMIT_REACHED") {
+          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: indexData.resetAt });
+          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+          return;
+        }
+        if (indexData.code === "DAILY_UPLOAD_LIMIT_REACHED") {
+          applyDailyUsageStatus({ chatAllowed: true, uploadAllowed: false, resetAt: indexData.resetAt });
+          setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+          return;
+        }
+        throw new Error(indexData.error || `Indexing failed (${indexResponse.status}).`);
+      }
+      stagedUploadPath = null;
       clearAttachment();
-      setStatus(uploadStatus, indexData.message || "Document indexed. You can now ask about it.", "success");
+      const indexedMessage = indexData.message || "Document indexed. You can now ask about it.";
+      await refreshDailyUsage();
+      if (dailyUsage?.chatAllowed && !dailyUsage.uploadAllowed) {
+        setStatus(uploadStatus, `${indexedMessage} You can upload another document tomorrow.`, "limit");
+      } else if (dailyUsage?.unavailable) {
+        setStatus(uploadStatus, `${indexedMessage} Daily usage could not be checked; refresh before your next request.`, "usage");
+      } else {
+        setStatus(uploadStatus, indexedMessage, "success");
+      }
       if (!prompt) return;
     }
 
@@ -653,7 +791,14 @@ chatForm.addEventListener("submit", async (event) => {
       const data = await readJson(response);
       if (!response.ok) {
         answer.textContent = data.error || `The request failed (${response.status}).`;
-        setStatus(chatStatus, "The answer could not be generated. Your question is still in the text box so you can retry.");
+        if (data.code === "DAILY_LIMIT_REACHED") {
+          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: data.resetAt });
+          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+        } else if (data.code === "DAILY_USAGE_UNAVAILABLE") {
+          await refreshDailyUsage();
+        } else {
+          setStatus(chatStatus, "The answer could not be generated. Your question is still in the text box so you can retry.");
+        }
         userMessage.setAttribute("data-request-failed", "true");
         return;
       }
@@ -674,6 +819,7 @@ chatForm.addEventListener("submit", async (event) => {
       updateComposerLabel();
       setStatus(chatStatus, "Answer ready.", "success");
       await loadConversations();
+      await refreshDailyUsage();
     } catch {
       answer.textContent = "The agent could not connect. Check your connection and try again.";
       setStatus(chatStatus, "Your question is still in the text box so you can retry.");
@@ -682,7 +828,14 @@ chatForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(uploadStatus, error?.message || "Upload failed. Please try again.");
   } finally {
-    sendButton.disabled = false;
+    if (stagedUploadPath) {
+      try {
+        await supabaseClient.storage.from("tmj-documents").remove([stagedUploadPath]);
+      } catch {
+        // A failed index request must not prevent the composer from recovering.
+      }
+    }
+    isSubmitting = false;
     updateComposerLabel();
   }
 });

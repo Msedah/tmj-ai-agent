@@ -1,14 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, {
+  consumeDailyUsage,
+  DAILY_CHAT_LIMIT,
+  DAILY_LIMIT_MESSAGE,
+  DAILY_UPLOAD_LIMIT_MESSAGE,
+  DAILY_UPLOAD_LIMIT,
   embedMany,
   extractBearerToken,
   generateChatResponse,
+  getDailyUsageStatus,
   getDeveloperIdentityReply,
   getDeveloperIdentityResponse,
+  GLOBAL_DAILY_CHAT_LIMIT,
   isSupportedDocument,
+  MAX_DAILY_USERS,
+  MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENT_CHUNKS,
+  nextUtcResetAt,
   normalizeExtractedText,
-  sanitizeAssistantReply
+  sanitizeAssistantReply,
+  utcUsageDay
 } from "../src/index.js";
 import {
   buildNwuSearchQuery,
@@ -18,6 +30,18 @@ import {
   parseNwuSearchResults,
   searchNwuLiveSources
 } from "../src/nwu-search.js";
+
+function mockUsageDatabase(firstResult) {
+  return {
+    prepare(sql) {
+      return {
+        bind(...bindings) {
+          return { first: async () => typeof firstResult === "function" ? firstResult({ sql, bindings }) : firstResult };
+        }
+      };
+    }
+  };
+}
 
 test("extractBearerToken strips a case-insensitive Bearer prefix", () => {
   assert.equal(extractBearerToken("Bearer abc123"), "abc123");
@@ -45,13 +69,60 @@ test("normalizeExtractedText collapses whitespace and trims edges", () => {
   assert.equal(normalizeExtractedText("  one\n\t two   three  "), "one two three");
 });
 
+test("daily usage helpers use UTC dates, return no balances, and parameterize atomic caps", async () => {
+  const now = new Date("2026-10-01T23:30:00.000Z");
+  const calls = [];
+  const database = mockUsageDatabase(({ sql, bindings }) => {
+    calls.push({ sql, bindings });
+    return sql.includes("INSERT INTO") ? { chat_count: 8, upload_count: 0 } : {
+      user_chat_count: 7, user_upload_count: 0, global_chat_count: 79
+    };
+  });
+
+  assert.equal(utcUsageDay(now), "2026-10-01");
+  assert.equal(nextUtcResetAt(now), "2026-10-02T00:00:00.000Z");
+  assert.equal(DAILY_CHAT_LIMIT, 8);
+  assert.equal(GLOBAL_DAILY_CHAT_LIMIT, 80);
+  assert.equal(DAILY_UPLOAD_LIMIT, 1);
+  assert.equal(MAX_DAILY_USERS, 10);
+  assert.equal(MAX_DOCUMENT_BYTES, 2 * 1024 * 1024);
+  assert.equal(MAX_DOCUMENT_CHUNKS, 20);
+
+  const status = await getDailyUsageStatus(database, "opaque-user-id", now);
+  assert.deepEqual(status, { chatAllowed: true, uploadAllowed: true, resetAt: null });
+  assert.deepEqual(calls[0].bindings, ["2026-10-01", "opaque-user-id"]);
+  assert.match(calls[0].sql, /SUM\(chat_count\)/);
+
+  const consumed = await consumeDailyUsage(database, "opaque-user-id", "chat", now);
+  assert.equal(consumed.allowed, true);
+  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 8, 80, 1, 10]);
+  assert.match(calls[1].sql, /ON CONFLICT \(usage_date, user_id\) DO UPDATE/);
+  assert.match(calls[1].sql, /RETURNING chat_count, upload_count/);
+  assert.match(calls[1].sql, /daily_usage\.chat_count < \?4/);
+  assert.match(calls[1].sql, /daily_usage\.upload_count < \?6/);
+  assert.match(calls[1].sql, /COUNT\(\*\).*< \?7/s);
+
+  const fullPilot = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 0, user_upload_count: 0, global_chat_count: 32, user_active: 0, active_users_count: 10
+  }), "new-user", now);
+  assert.deepEqual(fullPilot, { chatAllowed: false, uploadAllowed: false, resetAt: "2026-10-02T00:00:00.000Z" });
+  const existingTester = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 0, user_upload_count: 0, global_chat_count: 32, user_active: 1, active_users_count: 10
+  }), "active-user", now);
+  assert.deepEqual(existingTester, { chatAllowed: true, uploadAllowed: true, resetAt: null });
+
+  const denied = await consumeDailyUsage(mockUsageDatabase(null), "opaque-user-id", "chat", now);
+  assert.deepEqual(denied, { allowed: false, resetAt: "2026-10-02T00:00:00.000Z" });
+  assert.match(DAILY_LIMIT_MESSAGE, /come back tomorrow/i);
+});
+
 test("health route reports service readiness without exposing values", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/health"), {});
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     status: "ok",
     ready: false,
-    services: { ai: false, chat: false, documentIndexing: false, nwuIngestion: false }
+    services: { ai: false, chat: false, documentIndexing: false, nwuIngestion: false, dailyUsage: false }
   });
 });
 
@@ -59,14 +130,15 @@ test("health route distinguishes chat readiness from optional indexing configura
   const env = {
     AI: { run() {} },
     SUPABASE_URL: "https://private-project.supabase.co",
-    SUPABASE_ANON_KEY: "private-anon-key"
+    SUPABASE_ANON_KEY: "private-anon-key",
+    USAGE_DB: { prepare() {} }
   };
   const response = await worker.fetch(new Request("https://example.test/api/health"), env);
   const payload = await response.text();
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: false,
-    services: { ai: true, chat: true, documentIndexing: false, nwuIngestion: false }
+    services: { ai: true, chat: true, documentIndexing: false, nwuIngestion: false, dailyUsage: true }
   });
   assert.doesNotMatch(payload, /private-project|private-anon-key/);
 });
@@ -75,14 +147,14 @@ test("health route marks configured AI, chat, indexing and NWU ingestion ready",
   const env = {
     AI: { run() {} }, SUPABASE_URL: "https://private-project.supabase.co",
     SUPABASE_ANON_KEY: "private-anon-key", SUPABASE_SERVICE_ROLE_KEY: "private-service-key",
-    NWU_INGEST_SECRET: "private-ingest-secret"
+    NWU_INGEST_SECRET: "private-ingest-secret", USAGE_DB: { prepare() {} }
   };
   const response = await worker.fetch(new Request("https://example.test/api/health"), env);
   const payload = await response.text();
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: true,
-    services: { ai: true, chat: true, documentIndexing: true, nwuIngestion: true }
+    services: { ai: true, chat: true, documentIndexing: true, nwuIngestion: true, dailyUsage: true }
   });
   assert.doesNotMatch(payload, /private-project|private-anon-key|private-service-key|private-ingest-secret/);
 });
@@ -161,7 +233,230 @@ test("conversation deletion authenticates the owner and scopes service-role dele
 test("chat route returns a clear 503 when required production bindings are absent", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/chat", { method: "POST" }), {});
   assert.equal(response.status, 503);
-  assert.match((await response.json()).error, /AI or database service is not configured/);
+  assert.match((await response.json()).error, /daily usage service is not configured/);
+});
+
+test("usage status requires authentication and returns eligibility without exposing counts", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("https://example.test/api/usage", {
+      headers: { Authorization: "Bearer user-token" }
+    }), {
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      USAGE_DB: mockUsageDatabase({ user_chat_count: 8, user_upload_count: 1, global_chat_count: 80 })
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.chatAllowed, false);
+    assert.equal(payload.uploadAllowed, false);
+    assert.ok(Number.isFinite(Date.parse(payload.resetAt)));
+    assert.deepEqual(Object.keys(payload).sort(), ["chatAllowed", "resetAt", "uploadAllowed"]);
+    assert.doesNotMatch(JSON.stringify(payload), /count|points|neurons|remaining/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat cap is claimed atomically and rejected before retrieval or any AI call", async () => {
+  const originalFetch = globalThis.fetch;
+  let aiCalls = 0;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    calls.push(url.pathname);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Retrieval must not run after a quota denial: ${request.method} ${url.href}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("https://example.test/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ message: "Explain academic integrity." })
+    }), {
+      AI: { async run() { aiCalls += 1; throw new Error("AI must not run when over quota"); } },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      USAGE_DB: mockUsageDatabase(null)
+    });
+    assert.equal(response.status, 429);
+    const payload = await response.json();
+    assert.equal(payload.code, "DAILY_LIMIT_REACHED");
+    assert.equal(payload.error, DAILY_LIMIT_MESSAGE);
+    assert.ok(Number.isFinite(Date.parse(payload.resetAt)));
+    assert.equal(aiCalls, 0);
+    assert.deepEqual(calls, ["/auth/v1/user"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("document indexing rejects oversized bytes and extracted text before consuming upload or AI quota", async () => {
+  const originalFetch = globalThis.fetch;
+  const runIndex = async contents => {
+    let usageChecks = 0;
+    let usageClaims = 0;
+    let aiCalls = 0;
+    globalThis.fetch = async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/auth/v1/user")) {
+        return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url.pathname.includes("/storage/v1/object/")) {
+        return new Response(contents, { headers: { "Content-Type": "text/plain" } });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+    };
+    const response = await worker.fetch(new Request("https://example.test/api/index-document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ storagePath: "student-1/notes.txt", fileName: "notes.txt" })
+    }), {
+      AI: { async run() { aiCalls += 1; return { data: [Array(384).fill(0.01)] }; } },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: "service-key",
+      USAGE_DB: {
+        prepare(sql) {
+          if (sql.includes("INSERT INTO")) usageClaims += 1;
+          else usageChecks += 1;
+          return { bind() { return { first: async () => ({
+            user_chat_count: 0, user_upload_count: 0, global_chat_count: 0, user_active: 0, active_users_count: 0
+          }) }; } };
+        }
+      }
+    });
+    return { response, usageChecks, usageClaims, aiCalls };
+  };
+  try {
+    const oversized = await runIndex(new Uint8Array(MAX_DOCUMENT_BYTES + 1));
+    assert.equal(oversized.response.status, 413);
+    assert.equal((await oversized.response.json()).code, "UPLOAD_TOO_LARGE");
+    assert.equal(oversized.usageChecks, 1, "a read-only allowance check happens before storage access");
+    assert.equal(oversized.usageClaims, 0, "invalid files never consume the upload allowance");
+    assert.equal(oversized.aiCalls, 0);
+
+    const excessiveText = await runIndex("a".repeat(25_001));
+    assert.equal(excessiveText.response.status, 413);
+    assert.equal((await excessiveText.response.json()).code, "DOCUMENT_TOO_LONG");
+    assert.equal(excessiveText.usageChecks, 1);
+    assert.equal(excessiveText.usageClaims, 0);
+    assert.equal(excessiveText.aiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("document indexing enforces one upload per day without embedding a second document", async () => {
+  const originalFetch = globalThis.fetch;
+  let aiCalls = 0;
+  let usageChecks = 0;
+  let storageFetchCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.includes("/storage/v1/object/")) {
+      storageFetchCalls += 1;
+      return new Response("This is a valid module note with enough readable text.", { headers: { "Content-Type": "text/plain" } });
+    }
+    throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("https://example.test/api/index-document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ storagePath: "student-1/notes.txt", fileName: "notes.txt" })
+    }), {
+      AI: { async run() { aiCalls += 1; return { data: [Array(384).fill(0.01)] }; } },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: "service-key",
+      USAGE_DB: {
+        prepare(sql) {
+          assert.doesNotMatch(sql, /INSERT INTO/, "a used upload allowance is rejected during preflight");
+          usageChecks += 1;
+          return { bind() { return { first: async () => {
+            return { user_chat_count: 0, user_upload_count: 1, global_chat_count: 0, user_active: 1, active_users_count: 1 };
+          } }; } };
+        }
+      }
+    });
+    assert.equal(response.status, 429);
+    const payload = await response.json();
+    assert.equal(payload.code, "DAILY_UPLOAD_LIMIT_REACHED");
+    assert.equal(payload.error, DAILY_UPLOAD_LIMIT_MESSAGE);
+    assert.equal(usageChecks, 1);
+    assert.equal(storageFetchCalls, 0, "a blocked upload is rejected before downloading from storage");
+    assert.equal(aiCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("upload claim denial after preflight prevents embedding and returns the refreshed private limit", async () => {
+  const originalFetch = globalThis.fetch;
+  let aiCalls = 0;
+  let usageChecks = 0;
+  let storageFetchCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.includes("/storage/v1/object/")) {
+      storageFetchCalls += 1;
+      return new Response("This is a valid module note with enough readable text.", { headers: { "Content-Type": "text/plain" } });
+    }
+    throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("https://example.test/api/index-document", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ storagePath: "student-1/notes.txt", fileName: "notes.txt" })
+    }), {
+      AI: { async run() { aiCalls += 1; return { data: [Array(384).fill(0.01)] }; } },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: "service-key",
+      USAGE_DB: {
+        prepare(sql) {
+          return { bind() { return { first: async () => {
+            if (sql.includes("INSERT INTO")) return null;
+            usageChecks += 1;
+            return usageChecks === 1
+              ? { user_chat_count: 0, user_upload_count: 0, global_chat_count: 0, user_active: 0, active_users_count: 0 }
+              : { user_chat_count: 0, user_upload_count: 1, global_chat_count: 0, user_active: 1, active_users_count: 1 };
+          } }; } };
+        }
+      }
+    });
+    assert.equal(response.status, 429);
+    const payload = await response.json();
+    assert.equal(payload.code, "DAILY_UPLOAD_LIMIT_REACHED");
+    assert.equal(payload.error, DAILY_UPLOAD_LIMIT_MESSAGE);
+    assert.equal(usageChecks, 2, "preflight and denial refresh both read current eligibility");
+    assert.equal(storageFetchCalls, 1, "a concurrent winner can race only after the valid file is read");
+    assert.equal(aiCalls, 0, "a denied atomic claim never runs embeddings");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("embedMany calls BGE-small and validates 384-dimensional vectors", async () => {
@@ -319,7 +614,8 @@ test("developer chat returns the profile and does not call AI, embeddings, or NW
     const env = {
       AI: { async run() { aiCalls += 1; throw new Error("AI must not be called for the fixed identity response"); } },
       SUPABASE_URL: "https://test-project.supabase.co",
-      SUPABASE_ANON_KEY: "test-anon-key"
+      SUPABASE_ANON_KEY: "test-anon-key",
+      USAGE_DB: mockUsageDatabase({ chat_count: 1, upload_count: 0 })
     };
     const response = await worker.fetch(new Request("https://example.test/api/chat", {
       method: "POST",
@@ -405,7 +701,8 @@ test("chat returns live NWU citations when Supabase vector search is unavailable
         }
       },
       SUPABASE_URL: "https://test-project.supabase.co",
-      SUPABASE_ANON_KEY: "test-anon-key"
+      SUPABASE_ANON_KEY: "test-anon-key",
+      USAGE_DB: mockUsageDatabase({ chat_count: 1, upload_count: 0 })
     };
     const response = await worker.fetch(new Request("https://example.test/api/chat", {
       method: "POST",
