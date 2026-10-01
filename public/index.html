@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="TMJ AI Agent — academic AI assistance for NWU students.">
     <title>TMJ AI Agent | NWU Academic Assistant</title>
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -13,7 +13,7 @@
       <aside id="appSidebar" class="sidebar" aria-label="TMJ AI Agent sidebar">
         <div class="sidebar-top">
           <a class="brand" href="#chat" aria-label="TMJ AI Agent home">
-            <span class="brand-mark" aria-hidden="true">T</span>
+            <img class="brand-mark" src="/tmj-mark.svg" alt="">
             <span>TMJ <strong>AI Agent</strong></span>
           </a>
           <button id="newChat" class="new-chat" type="button"><span aria-hidden="true">＋</span> New chat</button>
@@ -27,8 +27,8 @@
         <div class="sidebar-spacer"></div>
         <div class="sidebar-footer">
           <div class="sidebar-note">
-            <span class="eyebrow">NWU study support</span>
-            <p>Academic help to complement your module material and lecturer guidance.</p>
+            <span class="eyebrow">Independent study tool</span>
+            <p>NWU-focused academic help alongside your course material and lecturer guidance.</p>
           </div>
           <p id="accountIdentity" class="account-identity" hidden></p>
           <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
@@ -50,7 +50,7 @@
             </button>
             <div class="app-heading">
               <h1>TMJ AI Agent</h1>
-              <p>Academic assistant for North-West University</p>
+              <p>Independent study companion for NWU students</p>
             </div>
           </div>
           <span class="study-pill"><span class="status-dot" aria-hidden="true"></span> Study mode</span>
@@ -61,10 +61,16 @@
         <section id="chat" class="chat-panel" aria-label="Chat with TMJ AI">
           <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text">
             <div class="welcome">
-              <div class="welcome-mark" aria-hidden="true">T</div>
+              <img class="welcome-mark" src="/tmj-mark.svg" alt="">
               <p class="eyebrow">YOUR NWU STUDY PARTNER</p>
               <h2>What are you studying today?</h2>
               <p>Ask a module question for a clear, structured explanation.</p>
+              <div class="starter-prompts" role="group" aria-label="Try a starter prompt">
+                <button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult concept from my module in plain language and give one example.">Explain a concept</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Find the current NWU rule about academic integrity and summarize it with an official source.">Find an NWU rule</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Help me make a one-week study plan for my next test. Ask what subjects and dates you need.">Build a study plan</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Quiz me one question at a time on a topic I am studying. Start by asking me the topic.">Quiz me</button>
+              </div>
             </div>
           </div>
 
@@ -93,15 +99,19 @@
           </form>
           <p id="chatStatus" class="status chat-status" role="status" aria-live="polite"></p>
           <p id="uploadStatus" class="status chat-status" role="status" aria-live="polite"></p>
-          <p class="disclaimer">Live NWU search uses topic keywords from your question on NWU’s public website. Do not include passwords or sensitive personal information. Verify current requirements against your module instructions and lecturer guidance.</p>
+          <p class="disclaimer">TMJ AI is an independent study aid, not an official NWU service. Live NWU search uses topic keywords from your question. Avoid passwords or sensitive information, and verify requirements with official sources and lecturer guidance.</p>
         </section>
 
         <div class="about-control">
-          <button id="aboutToggle" class="about-toggle" type="button" aria-controls="about" aria-expanded="false">About TMJ AI</button>
+          <button id="aboutToggle" class="about-toggle" type="button" aria-controls="about" aria-expanded="false">About &amp; privacy</button>
         </div>
         <section id="about" class="about" aria-labelledby="aboutTitle" hidden>
-          <h2 id="aboutTitle">About TMJ AI</h2>
-          <p>TMJ AI Agent supports NWU students with academic questions using current public NWU pages, linked documents, and material you choose to upload. It complements eFundi and official lecturer instructions; it does not replace them.</p>
+          <h2 id="aboutTitle">About TMJ AI and your data</h2>
+          <p>TMJ AI Agent is an independent study companion, not an official North-West University service or endorsement. It complements eFundi and lecturer guidance; it does not replace them.</p>
+          <p><strong>Conversations:</strong> Your signed-in questions and answers are saved to your account. You can delete a conversation and its messages from Recent conversations.</p>
+          <p><strong>Uploads:</strong> Uploaded files and their indexed text are stored separately to support future questions. Deleting a conversation does not delete its uploaded file or indexed text. Do not upload confidential, identifying, or sensitive material.</p>
+          <p><strong>Processing:</strong> Your question and relevant retrieved passages may be processed by Cloudflare Workers AI. Live NWU public search receives topic keywords from your question.</p>
+          <p><strong>Ratings:</strong> Helpful/not-helpful selections stay on this page and are not sent to TMJ in this version.</p>
         </section>
       </main>
     </div>

@@ -87,7 +87,7 @@ aboutToggle?.addEventListener("click", () => {
   const about = $("about");
   const show = Boolean(about?.hidden);
   if (about) about.hidden = !show;
-  aboutToggle.textContent = show ? "Hide About TMJ AI" : "About TMJ AI";
+  aboutToggle.textContent = show ? "Hide About & privacy" : "About & privacy";
   aboutToggle.setAttribute("aria-expanded", String(show));
   if (show) about?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   if (isMobileSidebar()) setSidebarOpen(false);
@@ -129,7 +129,7 @@ function updateAuthUI() {
 }
 
 function renderWelcome() {
-  $("messages").innerHTML = '<div class="welcome"><div class="welcome-mark" aria-hidden="true">T</div><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question for a clear, structured explanation.</p></div>';
+  $("messages").innerHTML = '<div class="welcome"><img class="welcome-mark" src="/tmj-mark.svg" alt=""><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question for a clear, structured explanation.</p><div class="starter-prompts" role="group" aria-label="Try a starter prompt"><button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult concept from my module in plain language and give one example.">Explain a concept</button><button class="starter-prompt" type="button" data-starter-prompt="Find the current NWU rule about academic integrity and summarize it with an official source.">Find an NWU rule</button><button class="starter-prompt" type="button" data-starter-prompt="Help me make a one-week study plan for my next test. Ask what subjects and dates you need.">Build a study plan</button><button class="starter-prompt" type="button" data-starter-prompt="Quiz me one question at a time on a topic I am studying. Start by asking me the topic.">Quiz me</button></div></div>';
 }
 
 function safeHttpsUrl(value) {
@@ -297,6 +297,85 @@ function appendDeveloperProfileCard(answer, candidate) {
   return true;
 }
 
+function appendAnswerActions(answer, text) {
+  const actions = document.createElement("div");
+  actions.className = "answer-actions";
+  actions.setAttribute("role", "group");
+  actions.setAttribute("aria-label", "Answer actions");
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "answer-action-button answer-copy";
+  copy.textContent = "Copy";
+  copy.setAttribute("aria-label", "Copy answer");
+  copy.addEventListener("click", async () => {
+    copy.disabled = true;
+    try {
+      const clipboard = window.navigator?.clipboard;
+      if (clipboard?.writeText) {
+        await clipboard.writeText(String(text || ""));
+      } else {
+        const field = document.createElement("textarea");
+        field.value = String(text || "");
+        field.setAttribute("readonly", "");
+        field.setAttribute("aria-hidden", "true");
+        if (field.style) field.style.position = "fixed";
+        document.body.appendChild(field);
+        field.select();
+        const copied = document.execCommand?.("copy");
+        if (field.remove) field.remove();
+        else if (field.parentNode) field.parentNode.removeChild(field);
+        if (!copied) throw new Error("Clipboard is unavailable.");
+      }
+      copy.textContent = "Copied";
+      copy.setAttribute("aria-label", "Answer copied to clipboard");
+    } catch {
+      copy.textContent = "Copy unavailable";
+      setStatus(chatStatus, "Could not copy automatically. Select the answer text and copy it manually.", "info");
+    } finally {
+      copy.disabled = false;
+    }
+  });
+  actions.appendChild(copy);
+
+  const question = document.createElement("span");
+  question.className = "answer-feedback-question";
+  question.textContent = "Helpful?";
+  actions.appendChild(question);
+
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "answer-action-button answer-feedback-button";
+  yes.textContent = "Yes";
+  yes.setAttribute("aria-label", "Mark this answer helpful");
+  yes.setAttribute("aria-pressed", "false");
+
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "answer-action-button answer-feedback-button";
+  no.textContent = "Not quite";
+  no.setAttribute("aria-label", "Mark this answer as needing improvement");
+  no.setAttribute("aria-pressed", "false");
+
+  const feedbackStatus = document.createElement("span");
+  feedbackStatus.className = "answer-feedback-status";
+  feedbackStatus.setAttribute("role", "status");
+  feedbackStatus.setAttribute("aria-live", "polite");
+  feedbackStatus.hidden = true;
+  const setRating = (selected, other, rating) => {
+    selected.setAttribute("aria-pressed", "true");
+    other.setAttribute("aria-pressed", "false");
+    feedbackStatus.hidden = false;
+    feedbackStatus.textContent = `Thanks for rating this answer ${rating}. This rating stays on this page and is not sent to TMJ.`;
+  };
+  yes.addEventListener("click", () => setRating(yes, no, "helpful"));
+  no.addEventListener("click", () => setRating(no, yes, "not quite helpful"));
+  actions.appendChild(yes);
+  actions.appendChild(no);
+  actions.appendChild(feedbackStatus);
+  answer.appendChild(actions);
+}
+
 function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfile = null) {
   const profile = role === "assistant"
     ? (normalizeDeveloperProfile(developerProfile) || parseDeveloperProfileReply(text))
@@ -307,6 +386,7 @@ function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfil
   else element.textContent = text;
   element.setAttribute("role", role === "assistant" ? "status" : "note");
   if (role === "assistant" && !profile) appendAssistantSources(element, sources, nwuSearchUrl);
+  if (role === "assistant" && String(text).trim() !== "Searching academic material…") appendAnswerActions(element, text);
   $("messages").appendChild(element);
   $("messages").scrollTop = $("messages").scrollHeight;
   return element;
@@ -368,6 +448,15 @@ $("removeAttachment").addEventListener("click", () => {
 });
 
 $("prompt").addEventListener("input", updateComposerLabel);
+
+$("messages").addEventListener("click", event => {
+  const starter = event.target?.closest?.(".starter-prompt");
+  const value = starter?.getAttribute("data-starter-prompt");
+  if (!value) return;
+  $("prompt").value = value;
+  updateComposerLabel();
+  $("prompt").focus();
+});
 
 async function readJson(response) {
   try {
@@ -579,6 +668,7 @@ chatForm.addEventListener("submit", async (event) => {
         answer.textContent = data.reply || "No response was returned.";
         appendAssistantSources(answer, data.sources, data.nwuSearchUrl);
       }
+      appendAnswerActions(answer, data.reply || "No response was returned.");
       if (data.conversationId) currentConversation = { id: data.conversationId };
       $("prompt").value = "";
       updateComposerLabel();
