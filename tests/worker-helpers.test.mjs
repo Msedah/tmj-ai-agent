@@ -5,6 +5,7 @@ import worker, {
   extractBearerToken,
   generateChatResponse,
   getDeveloperIdentityReply,
+  getDeveloperIdentityResponse,
   isSupportedDocument,
   normalizeExtractedText,
   sanitizeAssistantReply
@@ -265,11 +266,80 @@ test("live NWU search fetches and cites a current linked Senate Rules PDF", asyn
   assert.equal(document.type, "nwu_official_live");
 });
 
-test("developer identity is disclosed only on an explicit creator question and without contact details", () => {
-  assert.equal(getDeveloperIdentityReply("Who developed this assistant?"), "The developer is T.J. Mailula, from Tzaneen, Limpopo.");
-  assert.equal(getDeveloperIdentityReply("Who is the developer?"), "The developer is T.J. Mailula, from Tzaneen, Limpopo.");
-  assert.equal(getDeveloperIdentityReply("Explain academic integrity."), null);
-  assert.doesNotMatch(getDeveloperIdentityReply("Who developed TMJ AI?"), /@|gmail|email/i);
+test("developer questions return the exact structured profile only when explicitly requested", () => {
+  const identity = getDeveloperIdentityResponse("Who developed TMJ AI Agent?");
+  assert.deepEqual(identity.profile, {
+    name: "TJ Mailula",
+    fullName: "Tshepo Joseph Mailula",
+    initialsMeaning: "TJ stands for Tshepo Joseph",
+    role: "Developer and creator of TMJ AI Agent",
+    location: "Tzaneen, Limpopo, South Africa",
+    email: "mailulajosep@gmail.com",
+    phone: "0718452020",
+    phoneHref: "tel:+27718452020",
+    photoUrl: "/developer-tj.webp",
+    photoAlt: "Photo of TJ Mailula, developer of TMJ AI Agent"
+  });
+  assert.match(identity.reply, /Full name: Tshepo Joseph Mailula/);
+  assert.match(identity.reply, /TJ stands for: Tshepo Joseph/);
+  assert.match(identity.reply, /Location: Tzaneen, Limpopo, South Africa/);
+  assert.match(identity.reply, /Email: mailulajosep@gmail\.com/);
+  assert.match(identity.reply, /Phone: 0718452020/);
+  assert.equal(getDeveloperIdentityReply("Who is the developer?"), identity.reply);
+  assert.ok(getDeveloperIdentityResponse("What is the developer's email?"));
+  assert.ok(getDeveloperIdentityResponse("How can I contact the creator?"));
+  assert.ok(getDeveloperIdentityResponse("Who is T.J. Mailula?"));
+  assert.equal(getDeveloperIdentityResponse("Explain academic integrity."), null);
+  assert.equal(getDeveloperIdentityReply("What are NWU's developer tools?"), null);
+});
+
+test("developer chat returns the profile and does not call AI, embeddings, or NWU retrieval", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const savedMessages = [];
+  let aiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    calls.push({ url, request });
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/conversations")) {
+      return new Response(JSON.stringify({ id: "conversation-profile" }), { status: 201, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/messages")) {
+      savedMessages.push(JSON.parse(await request.text()));
+      return new Response(null, { status: 201 });
+    }
+    throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+  };
+
+  try {
+    const env = {
+      AI: { async run() { aiCalls += 1; throw new Error("AI must not be called for the fixed identity response"); } },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key"
+    };
+    const response = await worker.fetch(new Request("https://example.test/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ message: "What is the developer's email?" })
+    }), env);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.developerProfile.email, "mailulajosep@gmail.com");
+    assert.equal(payload.developerProfile.phone, "0718452020");
+    assert.equal(payload.developerProfile.photoUrl, "/developer-tj.webp");
+    assert.deepEqual(payload.sources, []);
+    assert.equal(payload.nwuSearchUrl, null);
+    assert.equal(aiCalls, 0);
+    assert.equal(calls.some(call => call.url.pathname.includes("multisite-search") || call.url.pathname.includes("/rpc/")), false);
+    assert.match(savedMessages[0][1].content, /mailulajosep@gmail\.com/);
+    assert.match(savedMessages[0][1].content, /0718452020/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("assistant reply sanitizer removes unavailable-source notes and trailing source lists", () => {

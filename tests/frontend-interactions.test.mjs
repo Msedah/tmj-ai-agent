@@ -98,6 +98,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     { id: "conversation-1", title: "Biology study" },
     { id: "conversation-2", title: "Research methods" }
   ];
+  let savedMessages = [];
   const sdk = {
     createClient: (_url, _key, options) => {
       clientOptions = options;
@@ -128,6 +129,13 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
               async limit() { return { data: savedConversations.map(conversation => ({ ...conversation })), error: null }; }
             };
           }
+          if (table === "messages") {
+            return {
+              select() { return this; },
+              eq() { return this; },
+              async order() { return { data: savedMessages.map(message => ({ ...message })), error: null }; }
+            };
+          }
           const query = {
             select() { return this; },
             order() { return this; },
@@ -155,16 +163,40 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
       return { ok: true, status: 200, json: async () => ({ ok: true, id }) };
     }
     if (url === "/api/index-document") return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
-    if (url === "/api/chat") return {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        reply: "Academic integrity is supported by the current NWU rules.",
-        conversationId: "conversation-1",
-        sources: [{ name: "NWU Senate Rules on Academic Integrity", url: "https://www.nwu.ac.za/published-rules.pdf", type: "nwu_official_live", date: "2026-08-20" }],
-        nwuSearchUrl: "https://www.nwu.ac.za/multisite-search?search_api_fulltext=academic%20integrity"
-      })
-    };
+    if (url === "/api/chat") {
+      const question = JSON.parse(options.body || "{}").message || "";
+      if (/developer|creator|created|developed/i.test(question)) return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          reply: "Developer profile\nName: TJ Mailula\nFull name: Tshepo Joseph Mailula\nTJ stands for: Tshepo Joseph\nRole: Developer and creator of TMJ AI Agent\nLocation: Tzaneen, Limpopo, South Africa\nEmail: mailulajosep@gmail.com\nPhone: 0718452020",
+          developerProfile: {
+            name: "TJ Mailula",
+            fullName: "Tshepo Joseph Mailula",
+            initialsMeaning: "TJ stands for Tshepo Joseph",
+            role: "Developer and creator of TMJ AI Agent",
+            location: "Tzaneen, Limpopo, South Africa",
+            email: "mailulajosep@gmail.com",
+            phone: "0718452020",
+            photoUrl: "/developer-tj.webp",
+            photoAlt: "Photo of TJ Mailula, developer of TMJ AI Agent"
+          },
+          conversationId: "conversation-1",
+          sources: [],
+          nwuSearchUrl: null
+        })
+      };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          reply: "Academic integrity is supported by the current NWU rules.",
+          conversationId: "conversation-1",
+          sources: [{ name: "NWU Senate Rules on Academic Integrity", url: "https://www.nwu.ac.za/published-rules.pdf", type: "nwu_official_live", date: "2026-08-20" }],
+          nwuSearchUrl: "https://www.nwu.ac.za/multisite-search?search_api_fulltext=academic%20integrity"
+        })
+      };
+    }
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
   const context = vm.createContext({ document, window: {
@@ -311,6 +343,38 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(referencesList.children[0].children[0].href, "https://www.nwu.ac.za/published-rules.pdf");
   assert.match(sourceSection.children.at(-1).textContent, /Search NWU’s public website/);
   assert.doesNotMatch(assistant.textContent, /No sources available|Source notes:\s*None/i);
+  assert.doesNotMatch(assistant.className, /developer-answer/, "ordinary academic answers do not render the developer profile");
+
+  elements.prompt.value = "Who developed TMJ AI Agent?";
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  const developerAnswer = elements.messages.children.at(-1);
+  assert.equal(developerAnswer.className, "message assistant developer-answer");
+  assert.equal(developerAnswer.children.length, 1);
+  const profileCard = developerAnswer.children[0];
+  assert.equal(profileCard.className, "developer-profile-card");
+  const descendants = root => [root, ...root.children.flatMap(descendants)];
+  const profileNodes = descendants(profileCard);
+  const photo = profileNodes.find(node => node.id === "img");
+  assert.equal(photo.src, "/developer-tj.webp");
+  assert.match(photo.alt, /TJ Mailula/);
+  const profileText = profileNodes.map(node => node.textContent).join(" ");
+  assert.match(profileText, /TJ Mailula/);
+  assert.match(profileText, /Tshepo Joseph Mailula/);
+  assert.match(profileText, /TJ stands for Tshepo Joseph/);
+  assert.match(profileText, /Tzaneen, Limpopo, South Africa/);
+  assert.match(profileText, /mailulajosep@gmail\.com/);
+  assert.match(profileText, /0718452020/);
+  const contactLinks = profileNodes.filter(node => node.id === "a");
+  assert.equal(contactLinks.length, 2);
+  assert.equal(contactLinks[0].href, "mailto:mailulajosep@gmail.com");
+  assert.equal(contactLinks[1].href, "tel:+27718452020");
+
+  savedMessages = [
+    { role: "user", content: "Who is the developer?" },
+    { role: "assistant", content: "Developer profile\nName: TJ Mailula\nFull name: Tshepo Joseph Mailula\nTJ stands for: Tshepo Joseph\nRole: Developer and creator of TMJ AI Agent\nLocation: Tzaneen, Limpopo, South Africa\nEmail: mailulajosep@gmail.com\nPhone: 0718452020" }
+  ];
+  await elements.conversationList.children[0].children[0].listeners.get("click")[0]();
+  assert.equal(elements.messages.children.at(-1).className, "message assistant developer-answer", "saved profile answers reconstruct the card on history reload");
 
   assert.equal(elements.conversationList.children.length, 2, "signed-in history renders each recent conversation after refresh");
   const firstConversationRow = elements.conversationList.children[0];
