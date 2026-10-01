@@ -1,39 +1,22 @@
 # TMJ AI Agent Architecture
 
 ## Identity
-TMJ AI Agent is an education-only assistant built for NWU students. Developer: TJ Mailula (mailulajosep@gmail.com).
+TMJ AI Agent is an education-only assistant built for North-West University (NWU) students. Developer contact details are intentionally not displayed in the interface. If a user explicitly asks who developed the app, the assistant gives only the approved short identity.
 
 ## NWU source hierarchy
-1. Official NWU resources.
-2. Current student-provided module documents.
-3. Reputable academic sources.
-4. General web sources only when needed.
+1. Current public official NWU pages and documents discovered through NWU's live multisite search.
+2. Current student-provided module documents, clearly labeled as user uploads rather than official policy.
+3. Reputable academic sources or general academic knowledge when useful; distinguish this from NWU-specific evidence.
 
-NWU's official eFundi platform is the LMS used for module resources, communication and assessments. TMJ AI must complement—not impersonate or replace—official NWU systems.
+NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. TMJ AI complements—not impersonates or replaces—official NWU systems. It does not scrape private eFundi courses or ask students for their NWU password.
 
-## Retrieval roadmap
-The current MVP establishes the agent boundary. The next production phase should add retrieval-augmented generation (RAG):
-- approved NWU public pages
-- NWU module resources legally available to the application
-- user-uploaded PDFs/slides/notes
-- indexed metadata: module code, faculty, year, study unit, source type, date
-- citations in answers
-- freshness checks for time-sensitive academic rules
+## Retrieval
+The Worker runs NWU's public multisite search for normalized question keywords, checks public official results, and fetches relevant public pages and linked PDFs within size/time bounds. Current policy pages can expose newly published or revised PDFs without a manual database reindex. Supabase pgvector remains available for user-authorized uploads and separately indexed materials. Answers return structured source links so the interface, not the language model, renders citations.
 
-Do not scrape private eFundi accounts or ask students for their NWU password. Any private-content integration must use an authorised mechanism.
+Unsupported current NWU policy or module-specific claims must not be invented. When no relevant source is retrieved, the assistant should still help with general academic concepts where appropriate, make the limitation explicit for current NWU-specific rules, and provide a link to NWU's live public search.
 
-## Authentication
-Supabase Auth handles accounts. Supabase Postgres stores conversations/messages. Row Level Security ensures a user can only access their own data.
+## Authentication and privacy
+Supabase Auth handles email/password accounts. Supabase Postgres stores conversations/messages. Row Level Security ensures a user can only access their own data. Private conversation history and uploads stay hidden from signed-out users. Live source discovery sends only normalized question keywords to NWU's public search endpoint; users are advised not to include passwords or sensitive personal data.
 
 ## AI boundary
-The server-side prompt is the primary scope guard. Production should add a lightweight academic-scope classifier before expensive model calls and enforce rate limits.
-
-## Production roadmap
-1. Configure Supabase and authentication.
-2. Add AI provider secret to Netlify.
-3. Implement conversation persistence in the server function.
-4. Add document upload and extraction.
-5. Build NWU knowledge base/RAG.
-6. Add source citations.
-7. Add module selection/profile.
-8. Add monitoring, abuse controls and rate limits.
+Cloudflare Workers AI provides chat and embeddings. Retrieved public pages and uploads are untrusted evidence and are never instructions. The assistant is limited to academic/education questions, with a narrow exception for the approved developer-identity reply.

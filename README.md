@@ -82,4 +82,9 @@ After applying the Supabase schema and setting Worker variables:
 
 TMJ AI Agent is not a general-purpose assistant. Non-academic questions should be declined. Module-specific answers should prioritize retrieved NWU and student-provided material, and should not invent course requirements, citations, or official policy. Verify consequential academic requirements against current NWU module instructions and lecturer guidance.
 
-Developer: TJ Mailula — mailulajosep@gmail.com.
+
+## Live NWU knowledge search
+
+For each signed-in academic question, the Worker searches NWU's public multisite search using short topic keywords, follows relevant links on public NWU-owned HTTPS hosts, and reads relevant public pages and PDFs. Official results are cited as clickable links in the chat. NWU's public Academic Policies page and Library policy pages can expose newly published documents without manual reindexing. Private eFundi and staff-intranet pages are excluded; the app never asks for NWU login credentials. Users should not include passwords or sensitive personal information in questions because topic keywords are searched on NWU's public site.
+
+Supabase vector search remains in place for the user's own uploaded module material. Uploads are labeled as student material, not official NWU policy. When no NWU-specific evidence can be retrieved, the assistant can still explain general academic concepts, but it must not invent current NWU requirements. It provides the NWU public search link and asks users to verify policy or module instructions with NWU/lecturers.
