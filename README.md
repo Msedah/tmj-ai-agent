@@ -64,6 +64,7 @@ npm test
 
 - `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document-indexing configuration. NWU ingestion is reported separately. Health does not consume an AI request or guarantee remaining daily quota.
 - `POST /api/chat` — authenticated academic question, vector retrieval, and conversation persistence.
+- `DELETE /api/conversations/{id}` — authenticated deletion of the signed-in user's conversation; related messages are removed by the database cascade.
 - `POST /api/index-document` — authenticated indexing of an uploaded user document.
 - `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
 

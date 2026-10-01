@@ -71,9 +71,11 @@ a { color: inherit; }
 .new-chat:hover { background: #f0f2f4; border-color: #cbd0d6; }
 .history-panel { min-height: 0; overflow: auto; padding: 3px 1px 0; }
 .history-panel h2 { margin: 0 0 10px; color: #737d85; font-size: 0.73rem; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase; }
-.conversation-list { display: grid; gap: 3px; }
+.conversation-list { display: grid; gap: 5px; }
+.conversation-row { min-width: 0; display: flex; align-items: center; gap: 4px; }
 .conversation {
-  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   padding: 9px 10px;
   overflow: hidden;
   color: #3a444b;
@@ -87,6 +89,9 @@ a { color: inherit; }
   transition: background 140ms ease;
 }
 .conversation:hover, .conversation:focus-visible { background: #eceef0; }
+.delete-conversation { min-height: 32px; flex: 0 0 auto; padding: 5px 8px; color: #9b4541; background: transparent; border: 1px solid transparent; border-radius: 7px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.delete-conversation:hover, .delete-conversation:focus-visible { color: #812c29; background: #fff0ee; border-color: #f0ceca; }
+.delete-conversation:disabled { opacity: 0.6; cursor: wait; }
 .muted { color: var(--muted); font-size: 0.84rem; }
 #authForm label { margin-top: 4px; color: #3e4a52; font-size: 0.8rem; font-weight: 700; }
 .module-code-control input, #authForm input {

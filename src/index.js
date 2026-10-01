@@ -77,6 +77,9 @@ export default {
     if (url.pathname === "/api/chat") return handleChat(request, env);
     if (url.pathname === "/api/index-document") return handleDocumentIndex(request, env);
     if (url.pathname === "/api/index-nwu") return handleNwuIndex(request, env);
+    if (url.pathname.startsWith("/api/conversations/")) {
+      return handleDeleteConversation(request, env, url.pathname.slice("/api/conversations/".length));
+    }
     return env.ASSETS.fetch(request);
   }
 };
@@ -204,6 +207,32 @@ async function handleChat(request, env) {
   }
 
   return json(200, { reply, conversationId, sources: citations, nwuSearchUrl });
+}
+
+async function handleDeleteConversation(request, env, conversationId) {
+  if (request.method !== "DELETE") return json(405, { error: "Method not allowed" });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId)) {
+    return json(400, { error: "Invalid conversation ID." });
+  }
+
+  const auth = await authenticate(request, env);
+  if (auth.error) return auth.error;
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) return json(503, { error: "Conversation deletion is not configured." });
+
+  try {
+    const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const { data, error } = await admin.from("conversations")
+      .delete()
+      .eq("id", conversationId)
+      .eq("user_id", auth.user.id)
+      .select("id")
+      .maybeSingle();
+    if (error) return json(500, { error: "Could not delete this conversation. Please try again." });
+    if (!data) return json(404, { error: "Conversation not found." });
+    return json(200, { ok: true, id: data.id });
+  } catch {
+    return json(500, { error: "Could not delete this conversation. Please try again." });
+  }
 }
 
 async function handleDocumentIndex(request, env) {

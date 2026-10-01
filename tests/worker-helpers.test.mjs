@@ -92,6 +92,71 @@ test("health route rejects unsupported methods", async () => {
   assert.deepEqual(await response.json(), { error: "Method not allowed" });
 });
 
+test("conversation deletion rejects unsupported methods and malformed IDs", async () => {
+  const id = "123e4567-e89b-12d3-a456-426614174000";
+  const wrongMethod = await worker.fetch(new Request(`https://example.test/api/conversations/${id}`), {});
+  assert.equal(wrongMethod.status, 405);
+  assert.deepEqual(await wrongMethod.json(), { error: "Method not allowed" });
+
+  const malformed = await worker.fetch(new Request("https://example.test/api/conversations/not-a-uuid", { method: "DELETE" }), {});
+  assert.equal(malformed.status, 400);
+  assert.deepEqual(await malformed.json(), { error: "Invalid conversation ID." });
+
+  const unauthenticated = await worker.fetch(new Request(`https://example.test/api/conversations/${id}`, { method: "DELETE" }), {});
+  assert.equal(unauthenticated.status, 401);
+  assert.deepEqual(await unauthenticated.json(), { error: "Please sign in first." });
+});
+
+test("conversation deletion authenticates the owner and scopes service-role delete to their row", async () => {
+  const originalFetch = globalThis.fetch;
+  const id = "123e4567-e89b-12d3-a456-426614174000";
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    calls.push({ url, request });
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/conversations") && request.method === "DELETE") {
+      return new Response(JSON.stringify([{ id }]), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected Supabase request: ${request.method} ${url.href}`);
+  };
+
+  try {
+    const env = {
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: "private-service-key"
+    };
+    const response = await worker.fetch(new Request(`https://example.test/api/conversations/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer student-token" }
+    }), env);
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, id });
+    const userCheck = calls.find(call => call.url.pathname.endsWith("/auth/v1/user"));
+    assert.equal(userCheck.request.headers.get("Authorization"), "Bearer student-token");
+    const deletion = calls.find(call => call.request.method === "DELETE");
+    assert.ok(deletion, "a database delete was issued");
+    assert.equal(deletion.url.searchParams.get("id"), `eq.${id}`);
+    assert.equal(deletion.url.searchParams.get("user_id"), "eq.student-1", "the signed-in user ID is applied as an owner filter");
+    assert.equal(deletion.request.headers.get("Authorization"), "Bearer private-service-key");
+
+    const noServiceRole = await worker.fetch(new Request(`https://example.test/api/conversations/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer student-token" }
+    }), { ...env, SUPABASE_SERVICE_ROLE_KEY: "" });
+    assert.equal(noServiceRole.status, 503);
+    assert.deepEqual(await noServiceRole.json(), { error: "Conversation deletion is not configured." });
+    assert.equal(calls.filter(call => call.request.method === "DELETE").length, 1, "missing admin credentials never reach the database delete");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("chat route returns a clear 503 when required production bindings are absent", async () => {
   const response = await worker.fetch(new Request("https://example.test/api/chat", { method: "POST" }), {});
   assert.equal(response.status, 503);
