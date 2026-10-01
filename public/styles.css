@@ -103,10 +103,12 @@ a { color: inherit; }
 .sidebar-note { padding: 0 4px; }
 .eyebrow { margin: 0 0 6px; color: var(--green); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
 .sidebar-note p { margin: 0; color: var(--muted); font-size: 0.77rem; line-height: 1.45; }
-.sidebar-link { width: fit-content; padding: 3px 4px; color: #58646d; font-size: 0.84rem; text-decoration: none; }
-.sidebar-link:hover { color: var(--green-dark); text-decoration: underline; text-underline-offset: 3px; }
 .history-toggle { width: 100%; min-height: 38px; padding: 8px 10px; color: #58646d; background: transparent; border: 1px solid #e1e4e7; border-radius: 9px; text-align: left; font-size: 0.82rem; font-weight: 650; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
 .history-toggle:hover { color: var(--green-dark); background: #eceef0; border-color: #d4d9dd; }
+.sidebar-collapse { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; color: #58646d; background: transparent; border: 1px solid #e1e4e7; border-radius: 9px; text-align: left; font-size: 0.82rem; font-weight: 650; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
+.sidebar-collapse:hover { color: var(--green-dark); background: #eceef0; border-color: #d4d9dd; }
+.sidebar-collapse-icon { width: 18px; flex: 0 0 18px; display: grid; place-items: center; font-size: 1.35rem; line-height: 1; }
+.sidebar-collapse-label { min-width: 0; }
 .auth-button {
   width: 100%;
   min-height: 42px;
@@ -188,6 +190,9 @@ a { color: inherit; }
 .send-button span:last-child { width: 21px; height: 21px; display: grid; place-items: center; color: var(--green); background: #fff; border-radius: 7px; font-size: 1rem; }
 .chat-status { padding: 0 6px; }
 .disclaimer { max-width: 760px; margin: 9px auto 16px; padding: 0 6px; color: #8a9399; font-size: 0.72rem; text-align: center; }
+.about-control { width: min(820px, calc(100% - 40px)); margin: 0 auto 10px; padding: 0 6px; text-align: center; }
+.about-toggle { min-height: 36px; padding: 6px 10px; color: #58646d; background: transparent; border: 1px solid transparent; border-radius: 8px; font-size: 0.78rem; font-weight: 650; cursor: pointer; }
+.about-toggle:hover { color: var(--green-dark); background: #f3f7f5; border-color: #e3ece8; }
 .about { width: min(820px, calc(100% - 40px)); margin: 0 auto 32px; padding: 18px 22px; color: #5f6c73; background: #fafbfb; border: 1px solid #eef0f1; border-radius: 14px; }
 .about h2 { margin: 0 0 5px; color: #35434a; font-size: 0.9rem; }
 .about p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
@@ -205,6 +210,22 @@ a { color: inherit; }
 .text-button:hover { text-decoration: underline; text-underline-offset: 3px; }
 input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.3); outline-offset: 2px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+@media (min-width: 801px) {
+  body.sidebar-collapsed .app-shell { grid-template-columns: 58px minmax(0, 1fr); }
+  body.sidebar-collapsed .sidebar { align-items: center; padding: 18px 7px 12px; }
+  body.sidebar-collapsed .sidebar-top,
+  body.sidebar-collapsed .history-panel,
+  body.sidebar-collapsed .sidebar-spacer,
+  body.sidebar-collapsed .sidebar-note,
+  body.sidebar-collapsed #accountIdentity,
+  body.sidebar-collapsed #authButton,
+  body.sidebar-collapsed #historyToggle { display: none !important; }
+  body.sidebar-collapsed .sidebar-footer { width: 100%; margin-top: auto; padding: 0; border: 0; justify-items: center; }
+  body.sidebar-collapsed .sidebar-collapse { width: 42px; min-height: 42px; justify-content: center; padding: 0; }
+  body.sidebar-collapsed .sidebar-collapse-label { display: none; }
+  body.sidebar-collapsed .sidebar-collapse-icon { transform: rotate(180deg); }
+}
 
 @media (max-width: 800px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); }

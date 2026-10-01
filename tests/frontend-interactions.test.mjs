@@ -17,6 +17,10 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(composer, /id="documentFile"/);
   assert.match(composer, /id="attachDocument"/);
   assert.match(composer, /id="sendButton"/);
+  assert.match(markup, /id="sidebarCollapse"[^>]*aria-label="Hide left panel"/);
+  assert.match(markup, /id="aboutToggle"[^>]*aria-expanded="false"/);
+  assert.match(markup, /<section id="about"[^>]*hidden>/);
+  assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
   assert.match(markup, /NWU’s public website/);
 });
@@ -54,6 +58,7 @@ class ElementMock {
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name] ?? null; }
   focus() {}
+  scrollIntoView() {}
   click() { this.clickCount += 1; }
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -69,9 +74,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     "chatForm", "chatStatus", "uploadStatus", "prompt", "messages", "newChat",
     "attachmentControls", "documentFile", "attachDocument", "attachmentPreview", "attachmentName",
     "removeAttachment", "moduleCodeControl", "moduleCode", "sendButton", "sendLabel",
-    "historyPanel", "conversationList", "appStatus", "sidebarToggle", "sidebarOverlay", "aboutLink", "historyToggle"
+    "historyPanel", "conversationList", "appStatus", "sidebarToggle", "sidebarOverlay", "sidebarCollapse", "aboutToggle", "about", "historyToggle"
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new ElementMock(id)]));
+  elements.about.hidden = true;
+  elements.sidebarCollapse.textContent = "Hide left panel";
+  elements.aboutToggle.textContent = "About TMJ AI";
   elements.chatForm.reset = () => {
     elements.prompt.value = "";
     elements.documentFile.value = "";
@@ -118,8 +126,9 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     }
   };
   const bodyClasses = new Set();
+  let mobileViewport = true;
   const document = {
-    body: { classList: { toggle: (name, force) => force ? bodyClasses.add(name) : bodyClasses.delete(name) } },
+    body: { classList: { toggle: (name, force) => force ? bodyClasses.add(name) : bodyClasses.delete(name), contains: name => bodyClasses.has(name) } },
     getElementById: id => elements[id] || null,
     createElement: tag => new ElementMock(tag)
   };
@@ -138,7 +147,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     };
     throw new Error(`Unexpected fetch URL: ${url}`);
   };
-  const context = vm.createContext({ document, window: { supabase: sdk }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
+  const context = vm.createContext({ document, window: { supabase: sdk, matchMedia: () => ({ matches: mobileViewport }) }, fetch, URL, crypto: { randomUUID: () => "uuid-1" }, console });
 
   // Supabase's UMD script exposes a classic global binding named `supabase`.
   vm.runInContext("var supabase = window.supabase;", context);
@@ -151,12 +160,36 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.attachmentControls.hidden, true, "private uploads are hidden when signed out");
   assert.equal(elements.accountIdentity.hidden, true, "account identity stays hidden when signed out");
   assert.doesNotMatch(source, /developerAttribution|mailulajosep@gmail\.com|Developed by/i);
+  assert.equal(elements.sidebarCollapse.getAttribute("aria-expanded"), "false", "the mobile sidebar starts closed");
 
   elements.sidebarToggle.listeners.get("click")[0]();
   assert.equal(bodyClasses.has("sidebar-open"), true, "mobile menu opens the sidebar");
   assert.equal(elements.sidebarOverlay.hidden, false);
+  assert.equal(elements.sidebarCollapse.getAttribute("aria-expanded"), "true");
   elements.sidebarOverlay.listeners.get("click")[0]();
   assert.equal(bodyClasses.has("sidebar-open"), false, "overlay closes the sidebar");
+  assert.equal(elements.sidebarCollapse.getAttribute("aria-expanded"), "false");
+  elements.sidebarToggle.listeners.get("click")[0]();
+  elements.sidebarCollapse.listeners.get("click")[0]();
+  assert.equal(bodyClasses.has("sidebar-open"), false, "the bottom sidebar control closes the mobile menu");
+  elements.sidebarToggle.listeners.get("click")[0]();
+  elements.aboutToggle.listeners.get("click")[0]();
+  assert.equal(elements.about.hidden, false, "About is revealed only after the explicit toggle");
+  assert.equal(elements.aboutToggle.textContent, "Hide About TMJ AI");
+  assert.equal(elements.aboutToggle.getAttribute("aria-expanded"), "true");
+  assert.equal(bodyClasses.has("sidebar-open"), false, "opening About closes the mobile menu");
+  elements.aboutToggle.listeners.get("click")[0]();
+  assert.equal(elements.about.hidden, true, "the About toggle hides the information again");
+
+  mobileViewport = false;
+  elements.sidebarCollapse.listeners.get("click")[0]();
+  assert.equal(bodyClasses.has("sidebar-collapsed"), true, "the desktop sidebar collapses to a narrow rail");
+  assert.equal(elements.sidebarCollapse.textContent, "Show left panel");
+  assert.equal(elements.sidebarCollapse.getAttribute("aria-expanded"), "false");
+  elements.sidebarCollapse.listeners.get("click")[0]();
+  assert.equal(bodyClasses.has("sidebar-collapsed"), false, "the bottom rail control restores the left panel");
+  assert.equal(elements.sidebarCollapse.textContent, "Hide left panel");
+  mobileViewport = true;
 
   await elements.authButton.listeners.get("click")[0]();
   assert.equal(elements.authDialog.open, true);

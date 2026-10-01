@@ -51,18 +51,47 @@ function showAuthDialog(message = "") {
 
 const sidebarToggle = $("sidebarToggle");
 const sidebarOverlay = $("sidebarOverlay");
+const sidebarCollapse = $("sidebarCollapse");
+const aboutToggle = $("aboutToggle");
+
+function isMobileSidebar() {
+  return Boolean(window.matchMedia?.("(max-width: 800px)").matches);
+}
 
 function setSidebarOpen(open) {
   document.body?.classList?.toggle("sidebar-open", open);
   sidebarToggle?.setAttribute("aria-expanded", String(open));
+  sidebarToggle?.setAttribute("aria-label", open ? "Close sidebar" : "Open sidebar");
+  if (isMobileSidebar()) sidebarCollapse?.setAttribute("aria-expanded", String(open));
   if (sidebarOverlay) sidebarOverlay.hidden = !open;
 }
 
-sidebarToggle?.addEventListener("click", () => {
-  setSidebarOpen(sidebarToggle.getAttribute("aria-expanded") !== "true");
-});
+if (isMobileSidebar()) sidebarCollapse?.setAttribute("aria-expanded", "false");
+
+sidebarToggle?.addEventListener("click", () => setSidebarOpen(sidebarToggle.getAttribute("aria-expanded") !== "true"));
 sidebarOverlay?.addEventListener("click", () => setSidebarOpen(false));
-$("aboutLink")?.addEventListener("click", () => setSidebarOpen(false));
+sidebarCollapse?.addEventListener("click", () => {
+  if (isMobileSidebar()) {
+    setSidebarOpen(false);
+    return;
+  }
+  const collapsed = !document.body.classList.contains("sidebar-collapsed");
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  const label = collapsed ? "Show left panel" : "Hide left panel";
+  sidebarCollapse.textContent = label;
+  sidebarCollapse.title = label;
+  sidebarCollapse.setAttribute("aria-label", label);
+  sidebarCollapse.setAttribute("aria-expanded", String(!collapsed));
+});
+aboutToggle?.addEventListener("click", () => {
+  const about = $("about");
+  const show = Boolean(about?.hidden);
+  if (about) about.hidden = !show;
+  aboutToggle.textContent = show ? "Hide About TMJ AI" : "About TMJ AI";
+  aboutToggle.setAttribute("aria-expanded", String(show));
+  if (show) about?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  if (isMobileSidebar()) setSidebarOpen(false);
+});
 $("historyToggle")?.addEventListener("click", () => {
   historyVisible = !historyVisible;
   $("historyPanel").hidden = !session || !historyVisible;

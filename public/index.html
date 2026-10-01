@@ -30,10 +30,13 @@
             <span class="eyebrow">NWU study support</span>
             <p>Academic help to complement your module material and lecturer guidance.</p>
           </div>
-          <a id="aboutLink" class="sidebar-link" href="#about">About TMJ AI</a>
           <p id="accountIdentity" class="account-identity" hidden></p>
           <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
           <button id="historyToggle" class="history-toggle" type="button" aria-controls="historyPanel" aria-expanded="true" hidden>Hide history</button>
+          <button id="sidebarCollapse" class="sidebar-collapse" type="button" aria-controls="appSidebar" aria-expanded="true" aria-label="Hide left panel" title="Hide left panel">
+            <span class="sidebar-collapse-icon" aria-hidden="true">‹</span>
+            <span class="sidebar-collapse-label">Hide left panel</span>
+          </button>
         </div>
       </aside>
 
@@ -93,7 +96,10 @@
           <p class="disclaimer">Live NWU search uses topic keywords from your question on NWU’s public website. Do not include passwords or sensitive personal information. Verify current requirements against your module instructions and lecturer guidance.</p>
         </section>
 
-        <section id="about" class="about" aria-labelledby="aboutTitle">
+        <div class="about-control">
+          <button id="aboutToggle" class="about-toggle" type="button" aria-controls="about" aria-expanded="false">About TMJ AI</button>
+        </div>
+        <section id="about" class="about" aria-labelledby="aboutTitle" hidden>
           <h2 id="aboutTitle">About TMJ AI</h2>
           <p>TMJ AI Agent supports NWU students with academic questions using current public NWU pages, linked documents, and material you choose to upload. It complements eFundi and official lecturer instructions; it does not replace them.</p>
         </section>
