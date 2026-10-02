@@ -205,7 +205,6 @@ a { color: inherit; }
 .remove-attachment { flex: 0 0 auto; padding: 2px 4px; color: #68767d; background: transparent; border: 0; font-size: 0.7rem; font-weight: 650; cursor: pointer; }
 .remove-attachment:hover { color: var(--danger); text-decoration: underline; }
 .module-code-control input { width: 170px; min-height: 34px; padding: 6px 8px; font-size: 0.75rem; }
-.upload-hint { color: #838d93; font-size: 0.68rem; }
 .send-button, .button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 13px; color: #fff; background: var(--green); border: 1px solid transparent; border-radius: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; transition: background 150ms ease, transform 150ms ease; }
 .send-button:hover:not(:disabled), .button:hover:not(:disabled) { background: var(--green-dark); }
 .send-button:active:not(:disabled), .button:active:not(:disabled) { transform: translateY(1px); }
@@ -267,7 +266,6 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .composer-bottom { align-items: flex-end; gap: 6px; }
   .attachment-controls { gap: 5px; }
   .attachment-preview { max-width: 40vw; }
-  .upload-hint { flex-basis: 100%; display: block; font-size: 0.64rem; }
 }
 @media (max-width: 480px) {
   .study-pill { padding: 5px 8px; font-size: 0.67rem; }

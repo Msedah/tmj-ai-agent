@@ -1,18 +1,65 @@
 import { createClient } from "@supabase/supabase-js";
-import pdfParse from "pdf-parse";
-import mammoth from "mammoth";
+import { OfficeParser } from "officeparser";
+import { WasmDocument } from "office-oxide-wasm/bundler";
 import { fetchNwuPublicDocument, normalizePublicNwuUrl, searchNwuLiveSources } from "./nwu-search.js";
+
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
+  "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
+  "odt", "odp", "ods", "odg", "rtf", "csv", "txt", "md",
+  "html", "htm", "epub", "tex", "ltx"
+]);
+const LEGACY_OFFICE_EXTENSIONS = new Set(["doc", "ppt", "xls"]);
+const OFFICE_PARSER_LIMITS = Object.freeze({
+  maxUncompressedBytes: 64 * 1024 * 1024,
+  maxZipEntries: 10_000,
+  maxTableCells: 100_000,
+  maxXmlElements: 200_000,
+  maxRepeatedContent: 1_000_000,
+  maxRawContentLength: 1_000_000
+});
 
 export function extractBearerToken(value = "") {
   return String(value).replace(/^Bearer\s+/i, "").trim();
 }
 
 export function isSupportedDocument(fileName = "") {
-  return /\.(pdf|docx|txt|md)$/i.test(String(fileName));
+  const extension = String(fileName).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return SUPPORTED_DOCUMENT_EXTENSIONS.has(extension);
 }
 
 export function normalizeExtractedText(value = "") {
   return String(value).replace(/\s+/g, " ").trim();
+}
+
+export async function extractDocumentText(fileName, bytes) {
+  const extension = String(fileName).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(extension)) throw new Error("Unsupported document format.");
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (extension === "txt") return new TextDecoder("utf-8", { fatal: false }).decode(data);
+
+  if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
+    let document;
+    try {
+      document = new WasmDocument(data, extension);
+      return String(document.plainText() || "");
+    } finally {
+      document?.free();
+    }
+  }
+
+  const fileType = extension === "htm" ? "html" : (extension === "ltx" ? "tex" : extension);
+  let ast;
+  try {
+    ast = await OfficeParser.parseOffice(data, { fileType, decompressionLimits: OFFICE_PARSER_LIMITS });
+    const result = await ast.to("text");
+    return String(result?.value || "");
+  } finally {
+    await ast?.destroy?.();
+  }
+}
+
+async function parsePdfForRetrieval(bytes) {
+  return { text: await extractDocumentText("retrieved-source.pdf", bytes) };
 }
 
 const DEVELOPER_PROFILE = Object.freeze({
@@ -87,9 +134,9 @@ const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 const EMBEDDING_DIMENSIONS = 384;
 export const DAILY_CHAT_LIMIT = 8;
 export const GLOBAL_DAILY_CHAT_LIMIT = 80;
-export const DAILY_UPLOAD_LIMIT = 1;
+export const DAILY_UPLOAD_LIMIT = 40 * 1024 * 1024;
 export const MAX_DAILY_USERS = 10;
-export const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = DAILY_UPLOAD_LIMIT;
 export const MAX_DOCUMENT_CHUNKS = 20;
 const MAX_DOCUMENT_TEXT_CHARS = 25_000;
 const MAX_NWU_CHUNKS = 100;
@@ -101,27 +148,30 @@ const DAILY_USAGE_STATUS_QUERY = `
   SELECT
     COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_chat_count,
     COALESCE((SELECT upload_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_count,
+    COALESCE((SELECT upload_bytes FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_bytes,
     COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS global_chat_count,
     CASE WHEN EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2) THEN 1 ELSE 0 END AS user_active,
     (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) AS active_users_count
 `;
 
 const DAILY_USAGE_CONSUME_QUERY = `
-  INSERT INTO daily_usage (usage_date, user_id, chat_count, upload_count)
+  INSERT INTO daily_usage (usage_date, user_id, chat_count, upload_count, upload_bytes)
   SELECT ?1, ?2,
     CASE WHEN ?3 = 'chat' THEN 1 ELSE 0 END,
-    CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END
-  WHERE (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5
+    CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END,
+    CASE WHEN ?3 = 'upload' THEN ?8 ELSE 0 END
+  WHERE (?3 = 'upload' OR (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5)
     AND (EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2)
       OR (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) < ?7)
-    AND COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?4
-    AND (?3 = 'chat' OR COALESCE((SELECT upload_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?6)
+    AND (?3 = 'upload' OR COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?4)
+    AND (?3 = 'chat' OR COALESCE((SELECT upload_bytes FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) + ?8 <= ?6)
   ON CONFLICT (usage_date, user_id) DO UPDATE SET
     chat_count = daily_usage.chat_count + CASE WHEN ?3 = 'chat' THEN 1 ELSE 0 END,
-    upload_count = daily_usage.upload_count + CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END
-  WHERE (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5
-    AND daily_usage.chat_count < ?4
-    AND (?3 = 'chat' OR daily_usage.upload_count < ?6)
+    upload_count = daily_usage.upload_count + CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END,
+    upload_bytes = daily_usage.upload_bytes + CASE WHEN ?3 = 'upload' THEN ?8 ELSE 0 END
+  WHERE (?3 = 'upload' OR (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5)
+    AND (?3 = 'upload' OR daily_usage.chat_count < ?4)
+    AND (?3 = 'chat' OR daily_usage.upload_bytes + ?8 <= ?6)
   RETURNING chat_count, upload_count
 `;
 
@@ -140,27 +190,48 @@ export async function getDailyUsageStatus(database, userId, now = new Date()) {
   const row = await database.prepare(DAILY_USAGE_STATUS_QUERY).bind(day, String(userId)).first();
   const userChats = Number(row?.user_chat_count || 0);
   const userUploads = Number(row?.user_upload_count || 0);
+  const uploadBytesUsed = Number(row?.user_upload_bytes || 0);
   const globalChats = Number(row?.global_chat_count || 0);
   const userActive = Number(row?.user_active || 0) > 0;
   const activeUsers = Number(row?.active_users_count || 0);
   const canJoinPilot = userActive || activeUsers < MAX_DAILY_USERS;
   const chatAllowed = canJoinPilot && userChats < DAILY_CHAT_LIMIT && globalChats < GLOBAL_DAILY_CHAT_LIMIT;
-  const uploadAllowed = chatAllowed && userUploads < DAILY_UPLOAD_LIMIT;
+  const uploadAllowed = canJoinPilot && uploadBytesUsed < DAILY_UPLOAD_LIMIT;
   return {
     chatAllowed,
     uploadAllowed,
+    uploadCount: userUploads,
+    uploadBytesUsed,
+    uploadBytesRemaining: Math.max(0, DAILY_UPLOAD_LIMIT - uploadBytesUsed),
     resetAt: chatAllowed && uploadAllowed ? null : nextUtcResetAt(now)
   };
 }
 
-export async function consumeDailyUsage(database, userId, kind, now = new Date()) {
+export async function consumeDailyUsage(database, userId, kind, now = new Date(), uploadBytes = 0) {
   if (!database || typeof database.prepare !== "function") throw new Error("Daily usage database is not configured.");
   if (kind !== "chat" && kind !== "upload") throw new Error("Unknown daily usage type.");
+  if (kind === "upload" && (!Number.isSafeInteger(uploadBytes) || uploadBytes < 1 || uploadBytes > MAX_DOCUMENT_BYTES)) {
+    throw new Error("A valid document size is required for upload quota claims.");
+  }
   const day = utcUsageDay(now);
   const row = await database.prepare(DAILY_USAGE_CONSUME_QUERY)
-    .bind(day, String(userId), kind, DAILY_CHAT_LIMIT, GLOBAL_DAILY_CHAT_LIMIT, DAILY_UPLOAD_LIMIT, MAX_DAILY_USERS)
+    .bind(day, String(userId), kind, DAILY_CHAT_LIMIT, GLOBAL_DAILY_CHAT_LIMIT, DAILY_UPLOAD_LIMIT, MAX_DAILY_USERS, kind === "upload" ? uploadBytes : 0)
     .first();
   return { allowed: Boolean(row), resetAt: row ? null : nextUtcResetAt(now) };
+}
+
+async function releaseDailyUploadUsage(database, userId, uploadBytes, now = new Date()) {
+  try {
+    await database.prepare(`
+      UPDATE daily_usage
+      SET upload_count = upload_count - 1,
+          upload_bytes = upload_bytes - ?3
+      WHERE usage_date = ?1 AND user_id = ?2
+        AND upload_count > 0 AND upload_bytes >= ?3
+    `).bind(utcUsageDay(now), String(userId), uploadBytes).run();
+  } catch {
+    // A refund failure must not hide the original indexing error.
+  }
 }
 
 export default {
@@ -246,10 +317,9 @@ async function handleChat(request, env) {
   let liveSources = [];
   let nwuSearchUrl = null;
   if (!identityReply) {
-    const pdfParser = async bytes => pdfParse(Buffer.from(bytes));
     const [embeddingResult, liveResult] = await Promise.all([
       embedMany([message.slice(0, 1200)], env),
-      searchNwuLiveSources(message, { pdfParser }).catch(() => ({ sources: [], searchUrl: null }))
+      searchNwuLiveSources(message, { pdfParser: parsePdfForRetrieval }).catch(() => ({ sources: [], searchUrl: null }))
     ]);
     liveSources = Array.isArray(liveResult?.sources) ? liveResult.sources : [];
     nwuSearchUrl = liveResult?.searchUrl || null;
@@ -389,8 +459,11 @@ async function handleDocumentIndex(request, env) {
   const path = String(body.storagePath || "");
   const fileName = String(body.fileName || "");
   const moduleCode = String(body.moduleCode || "").trim().toUpperCase();
+  const declaredFileSize = Number(body.fileSize);
   if (!path || !fileName || !path.startsWith(auth.user.id + "/")) return json(400, { error: "Invalid document path." });
-  if (!isSupportedDocument(fileName)) return json(400, { error: "Supported files are PDF, DOCX, TXT and MD." });
+  if (!isSupportedDocument(fileName)) return json(400, { error: "This document format is not supported." });
+  if (!Number.isSafeInteger(declaredFileSize) || declaredFileSize < 1) return json(400, { error: "A valid file size is required." });
+  if (declaredFileSize > MAX_DOCUMENT_BYTES) return json(413, { error: "This file is too large to upload.", code: "UPLOAD_TOO_LARGE" });
 
   let initialUsageStatus;
   try {
@@ -399,10 +472,14 @@ async function handleDocumentIndex(request, env) {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
   }
   if (!initialUsageStatus.uploadAllowed) {
-    if (!initialUsageStatus.chatAllowed) {
-      return json(429, { error: DAILY_LIMIT_MESSAGE, code: "DAILY_LIMIT_REACHED", resetAt: initialUsageStatus.resetAt });
-    }
     return json(429, { error: DAILY_UPLOAD_LIMIT_MESSAGE, code: "DAILY_UPLOAD_LIMIT_REACHED", resetAt: initialUsageStatus.resetAt });
+  }
+  if (declaredFileSize > initialUsageStatus.uploadBytesRemaining) {
+    return json(413, {
+      error: "This file will not fit within today's remaining upload allowance. Try a smaller file.",
+      code: "UPLOAD_EXCEEDS_DAILY_BUDGET",
+      resetAt: initialUsageStatus.resetAt
+    });
   }
 
   const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
@@ -411,15 +488,16 @@ async function handleDocumentIndex(request, env) {
 
   const buffer = Buffer.from(await download.data.arrayBuffer());
   if (buffer.byteLength > MAX_DOCUMENT_BYTES) {
-    return json(413, { error: "Maximum document size is 2 MiB.", code: "UPLOAD_TOO_LARGE" });
+    return json(413, { error: "This file is too large to upload.", code: "UPLOAD_TOO_LARGE" });
   }
-  let text = "";
+  if (buffer.byteLength !== declaredFileSize) {
+    return json(400, { error: "The uploaded file size did not match the selected file.", code: "UPLOAD_SIZE_MISMATCH" });
+  }
+  let text;
   try {
-    if (/\.pdf$/i.test(fileName)) text = (await pdfParse(buffer)).text;
-    else if (/\.docx$/i.test(fileName)) text = (await mammoth.extractRawText({ buffer })).value;
-    else text = new TextDecoder().decode(buffer);
+    text = await extractDocumentText(fileName, buffer);
   } catch {
-    return json(422, { error: "The document could not be extracted. Try a text-based PDF or DOCX." });
+    return json(422, { error: "The document could not be extracted. Check that the file is valid and is not password-protected." });
   }
   text = normalizeExtractedText(text);
   if (text.length < 30) return json(422, { error: "No usable text was found in the document." });
@@ -434,7 +512,7 @@ async function handleDocumentIndex(request, env) {
 
   let usage;
   try {
-    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "upload");
+    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "upload", new Date(), buffer.byteLength);
   } catch {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
   }
@@ -445,12 +523,12 @@ async function handleDocumentIndex(request, env) {
     } catch {
       return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
     }
-    if (!status.chatAllowed) {
-      return json(429, { error: DAILY_LIMIT_MESSAGE, code: "DAILY_LIMIT_REACHED", resetAt: status.resetAt });
+    if (!status.uploadAllowed) {
+      return json(429, { error: DAILY_UPLOAD_LIMIT_MESSAGE, code: "DAILY_UPLOAD_LIMIT_REACHED", resetAt: status.resetAt });
     }
-    return json(429, {
-      error: DAILY_UPLOAD_LIMIT_MESSAGE,
-      code: "DAILY_UPLOAD_LIMIT_REACHED",
+    return json(413, {
+      error: "This file will not fit within today's remaining upload allowance. Try a smaller file.",
+      code: "UPLOAD_EXCEEDS_DAILY_BUDGET",
       resetAt: status.resetAt
     });
   }
@@ -459,13 +537,19 @@ async function handleDocumentIndex(request, env) {
   for (let i = 0; i < chunks.length; i += 20) {
     const batch = chunks.slice(i, i + 20);
     const embedding = await embedMany(batch, env);
-    if (!embedding.ok) return json(embedding.status, { error: embedding.error });
+    if (!embedding.ok) {
+      await releaseDailyUploadUsage(env.USAGE_DB, auth.user.id, buffer.byteLength);
+      return json(embedding.status, { error: embedding.error });
+    }
     embeddings.push(...embedding.embeddings);
   }
   const { data: doc, error: docError } = await admin.from("documents").insert({
     user_id: auth.user.id, file_name: fileName, storage_path: path, module_code: moduleCode || null, source_type: "student_upload"
   }).select("id").single();
-  if (docError) return json(500, { error: "Could not register the document: " + docError.message });
+  if (docError) {
+    await releaseDailyUploadUsage(env.USAGE_DB, auth.user.id, buffer.byteLength);
+    return json(500, { error: "Could not register the document: " + docError.message });
+  }
 
   const rows = chunks.map((content, index) => ({
     document_id: doc.id, user_id: auth.user.id, chunk_index: index, content, embedding_cloudflare: embeddings[index]
@@ -473,6 +557,7 @@ async function handleDocumentIndex(request, env) {
   const { error: chunkError } = await admin.from("document_chunks").insert(rows);
   if (chunkError) {
     await admin.from("documents").delete().eq("id", doc.id).eq("user_id", auth.user.id);
+    await releaseDailyUploadUsage(env.USAGE_DB, auth.user.id, buffer.byteLength);
     return json(500, { error: "Could not save document embeddings: " + chunkError.message });
   }
   return json(200, { ok: true, message: "Document indexed successfully. TMJ AI can now use it for your academic questions.", chunks: chunks.length });
@@ -491,8 +576,7 @@ async function handleNwuIndex(request, env) {
   const moduleCode = String(body.moduleCode || "").trim().toUpperCase();
   if (!url) return json(400, { error: "Provide a public HTTPS URL on an NWU-owned host. Private eFundi and staff pages are not supported." });
 
-  const pdfParser = async bytes => pdfParse(Buffer.from(bytes));
-  const source = await fetchNwuPublicDocument(url, { pdfParser, maxChars: 100_000, fullText: true });
+  const source = await fetchNwuPublicDocument(url, { pdfParser: parsePdfForRetrieval, maxChars: 100_000, fullText: true });
   if (!source || source.content.length < 100) return json(422, { error: "The public NWU page or PDF could not be fetched or did not contain enough readable text." });
   const text = normalizeExtractedText(source.content);
   const chunks = chunkText(text, 1400, 200);

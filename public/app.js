@@ -27,9 +27,19 @@ const attachmentControls = $("attachmentControls");
 const attachDocument = $("attachDocument");
 const documentFile = $("documentFile");
 const sendButton = $("sendButton");
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
+const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
+  "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
+  "odt", "odp", "ods", "odg", "rtf", "csv", "txt", "md",
+  "html", "htm", "epub", "tex", "ltx"
+]);
 const DAILY_LIMIT_MESSAGE = "You've reached today's daily limit. Please come back tomorrow; access resets at 02:00 South African time.";
 const UPLOAD_LIMIT_MESSAGE = "You've reached today's document upload limit. Please come back tomorrow; uploads reset at 02:00 South African time.";
+
+function isSupportedDocument(fileName = "") {
+  const extension = String(fileName).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return SUPPORTED_DOCUMENT_EXTENSIONS.has(extension);
+}
 
 function setStatus(element, message, kind = "error") {
   if (!element) return;
@@ -141,6 +151,7 @@ function updateAuthUI() {
     usageCheckVersion += 1;
     clearUsageRefreshTimer();
     dailyUsage = null;
+    if (session) void refreshDailyUsage();
   }
   updateComposerLabel();
   if (session && !dailyUsage) void refreshDailyUsage();
@@ -419,8 +430,32 @@ function clearAttachment() {
   updateComposerLabel();
 }
 
+function retainAttachmentFiles(files) {
+  if (!files.length) {
+    clearAttachment();
+    return;
+  }
+  if (documentFile) {
+    try {
+      if (typeof DataTransfer === "function") {
+        const transfer = new DataTransfer();
+        files.forEach(file => transfer.items.add(file));
+        documentFile.files = transfer.files;
+      } else {
+        documentFile.files = files;
+      }
+    } catch {
+      documentFile.files = files;
+    }
+  }
+  $("attachmentName").textContent = files.map(file => file.name).join(", ");
+  $("attachmentPreview").hidden = false;
+  $("moduleCodeControl").hidden = false;
+  updateComposerLabel();
+}
+
 function updateComposerLabel() {
-  const hasFile = Boolean(documentFile?.files?.[0]);
+  const hasFile = Boolean(documentFile?.files?.length);
   const hasQuestion = Boolean($("prompt")?.value.trim());
   const label = $("sendLabel");
   const chatBlocked = Boolean(session && (!dailyUsage || !dailyUsage.chatAllowed));
@@ -429,13 +464,16 @@ function updateComposerLabel() {
   const usageUnavailable = Boolean(session && dailyUsage?.unavailable);
   const blockedLabel = usageUnavailable ? "Access unavailable" : (usagePending ? "Checking access…" : "Limit reached");
   const blockedAriaLabel = usageUnavailable ? "Daily usage check unavailable" : (usagePending ? "Checking daily access" : "Daily message limit reached");
-  if (sendButton) sendButton.disabled = isSubmitting || chatBlocked;
+  if (sendButton) {
+    sendButton.disabled = isSubmitting || (hasFile ? uploadBlocked || (hasQuestion && chatBlocked) : chatBlocked);
+    sendButton.setAttribute("aria-busy", String(isSubmitting));
+  }
   if (attachDocument) attachDocument.disabled = uploadBlocked;
   if (documentFile) documentFile.disabled = uploadBlocked;
   if (label && !isSubmitting) {
-    label.textContent = chatBlocked ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload & index") : "Ask TMJ AI");
+    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload & index") : "Ask TMJ AI"));
   }
-  if (sendButton) sendButton.setAttribute("aria-label", chatBlocked ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload document and ask question" : "Upload and index document") : "Send message"));
+  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload documents and ask question" : "Upload and index documents") : "Send message")));
 }
 
 $("attachDocument").addEventListener("click", () => {
@@ -447,25 +485,33 @@ $("attachDocument").addEventListener("click", () => {
 });
 
 documentFile.addEventListener("change", () => {
-  const file = documentFile.files?.[0];
-  if (!file) {
+  const files = Array.from(documentFile.files || []);
+  if (!files.length) {
     clearAttachment();
     return;
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
+  const tooLarge = files.find(file => file.size > MAX_UPLOAD_BYTES);
+  if (tooLarge) {
     clearAttachment();
-    setStatus(uploadStatus, "Maximum file size is 2 MiB.");
+    setStatus(uploadStatus, "This file is too large to add.");
     return;
   }
-  if (!/\.(pdf|docx|txt|md)$/i.test(file.name)) {
+  const unsupported = files.find(file => !isSupportedDocument(file.name));
+  if (unsupported) {
     clearAttachment();
-    setStatus(uploadStatus, "Supported files: PDF, DOCX, TXT and MD.");
+    setStatus(uploadStatus, "This file type can't be added.");
     return;
   }
-  $("attachmentName").textContent = file.name;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_UPLOAD_BYTES) {
+    clearAttachment();
+    setStatus(uploadStatus, "This selection is too large to add at once. Try fewer or smaller files.");
+    return;
+  }
+  $("attachmentName").textContent = files.map(file => file.name).join(", ");
   $("attachmentPreview").hidden = false;
   $("moduleCodeControl").hidden = false;
-  setStatus(uploadStatus, "Document attached. Submit to upload and index it.", "info");
+  setStatus(uploadStatus, `${files.length} ${files.length === 1 ? "document" : "documents"} selected. Submit to upload and index them.`, "info");
   updateComposerLabel();
 });
 
@@ -520,7 +566,7 @@ function applyDailyUsageStatus(payload) {
   } else if (chatStatus?.dataset?.kind === "limit" || chatStatus?.dataset?.kind === "usage") {
     setStatus(chatStatus, "", "success");
   }
-  if (dailyUsage.chatAllowed && !dailyUsage.uploadAllowed) {
+  if (!dailyUsage.uploadAllowed) {
     setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
   } else if (uploadStatus?.dataset?.kind === "limit") {
     setStatus(uploadStatus, "", "success");
@@ -688,7 +734,7 @@ $("newChat").addEventListener("click", () => {
   renderWelcome();
   if (session && dailyUsage && !dailyUsage.chatAllowed) setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
   else setStatus(chatStatus, "", "success");
-  if (session && dailyUsage?.chatAllowed && !dailyUsage.uploadAllowed) setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+  if (session && dailyUsage && !dailyUsage.uploadAllowed) setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
   else setStatus(uploadStatus, "", "info");
   $("prompt").focus();
 });
@@ -701,8 +747,8 @@ chatForm.addEventListener("submit", async (event) => {
   }
 
   const prompt = $("prompt").value.trim();
-  const file = documentFile.files?.[0] || null;
-  if (!prompt && !file) {
+  const files = Array.from(documentFile.files || []);
+  if (!prompt && !files.length) {
     setStatus(chatStatus, "Enter an academic question or attach a document first.");
     $("prompt").focus();
     return;
@@ -712,69 +758,101 @@ chatForm.addEventListener("submit", async (event) => {
     setStatus(chatStatus, "Could not check today's usage. Please try again shortly.", "usage");
     return;
   }
-  if (!dailyUsage?.chatAllowed) {
+  if (prompt && !dailyUsage?.chatAllowed) {
     setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
     return;
   }
-  if (file && !dailyUsage.uploadAllowed) {
+  if (files.length && !dailyUsage.uploadAllowed) {
     setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
     return;
   }
-  if (file && file.size > MAX_UPLOAD_BYTES) {
-    setStatus(uploadStatus, "Maximum file size is 2 MiB.");
+  const tooLarge = files.find(file => file.size > MAX_UPLOAD_BYTES);
+  if (tooLarge) {
+    setStatus(uploadStatus, "This file is too large to add.");
     return;
   }
-  if (file && !/\.(pdf|docx|txt|md)$/i.test(file.name)) {
-    setStatus(uploadStatus, "Supported files: PDF, DOCX, TXT and MD.");
+  const unsupported = files.find(file => !isSupportedDocument(file.name));
+  if (unsupported) {
+    setStatus(uploadStatus, "This file type can't be added.");
+    return;
+  }
+  if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) {
+    setStatus(uploadStatus, "This selection is too large to add at once. Try fewer or smaller files.");
     return;
   }
 
   isSubmitting = true;
-  let stagedUploadPath = null;
   updateComposerLabel();
+  if (!files.length) {
+    $("sendLabel").textContent = "Sending…";
+    setStatus(chatStatus, "Sending your question…", "info");
+  }
   try {
-    if (file) {
-      $("sendLabel").textContent = "Uploading…";
-      setStatus(uploadStatus, "Uploading and indexing your document…", "info");
-      const path = `${session.user.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const upload = await supabaseClient.storage.from("tmj-documents").upload(path, file, {
-        contentType: file.type || "application/octet-stream",
-        upsert: false
-      });
-      if (upload.error) throw upload.error;
-      stagedUploadPath = path;
+    if (files.length) {
+      let indexedCount = 0;
+      const uploadErrors = [];
+      const failedFiles = [];
+      let uploadLimitReached = false;
+      for (const [index, file] of files.entries()) {
+        let stagedUploadPath = null;
+        $("sendLabel").textContent = `Uploading ${index + 1}/${files.length}…`;
+        setStatus(uploadStatus, `Uploading and indexing ${file.name} (${index + 1} of ${files.length})…`, "info");
+        try {
+          const path = `${session.user.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          const upload = await supabaseClient.storage.from("tmj-documents").upload(path, file, {
+            contentType: file.type || "application/octet-stream",
+            upsert: false
+          });
+          if (upload.error) throw upload.error;
+          stagedUploadPath = path;
 
-      const indexResponse = await fetch("/api/index-document", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ storagePath: path, fileName: file.name, moduleCode: $("moduleCode").value.trim().toUpperCase() })
-      });
-      const indexData = await readJson(indexResponse);
-      if (!indexResponse.ok) {
-        if (indexData.code === "DAILY_LIMIT_REACHED") {
-          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: indexData.resetAt });
-          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
-          return;
+          const indexResponse = await fetch("/api/index-document", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+            body: JSON.stringify({ storagePath: path, fileName: file.name, fileSize: file.size, moduleCode: $("moduleCode").value.trim().toUpperCase() })
+          });
+          const indexData = await readJson(indexResponse);
+          if (!indexResponse.ok) {
+            if (indexData.code === "DAILY_LIMIT_REACHED") {
+              applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: indexData.resetAt });
+              setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+              failedFiles.push(...files.slice(index));
+              uploadLimitReached = true;
+              break;
+            }
+            if (indexData.code === "DAILY_UPLOAD_LIMIT_REACHED") {
+              applyDailyUsageStatus({ chatAllowed: dailyUsage?.chatAllowed === true, uploadAllowed: false, resetAt: indexData.resetAt });
+              setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+              failedFiles.push(...files.slice(index));
+              uploadLimitReached = true;
+              break;
+            }
+            uploadErrors.push(`${file.name}: ${indexData.error || `Indexing failed (${indexResponse.status}).`}`);
+            failedFiles.push(file);
+            continue;
+          }
+          stagedUploadPath = null;
+          indexedCount += 1;
+        } catch (error) {
+          uploadErrors.push(`${file.name}: ${error?.message || "Upload failed."}`);
+          failedFiles.push(file);
+        } finally {
+          if (stagedUploadPath) {
+            try { await supabaseClient.storage.from("tmj-documents").remove([stagedUploadPath]); } catch {}
+          }
         }
-        if (indexData.code === "DAILY_UPLOAD_LIMIT_REACHED") {
-          applyDailyUsageStatus({ chatAllowed: true, uploadAllowed: false, resetAt: indexData.resetAt });
-          setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
-          return;
-        }
-        throw new Error(indexData.error || `Indexing failed (${indexResponse.status}).`);
       }
-      stagedUploadPath = null;
-      clearAttachment();
-      const indexedMessage = indexData.message || "Document indexed. You can now ask about it.";
-      await refreshDailyUsage();
-      if (dailyUsage?.chatAllowed && !dailyUsage.uploadAllowed) {
-        setStatus(uploadStatus, `${indexedMessage} You can upload another document tomorrow.`, "limit");
-      } else if (dailyUsage?.unavailable) {
-        setStatus(uploadStatus, `${indexedMessage} Daily usage could not be checked; refresh before your next request.`, "usage");
-      } else {
-        setStatus(uploadStatus, indexedMessage, "success");
+      retainAttachmentFiles(failedFiles);
+      if (indexedCount) await refreshDailyUsage();
+      if (uploadLimitReached && !dailyUsage?.uploadAllowed) {
+        setStatus(uploadStatus, `${indexedCount} of ${files.length} selected ${files.length === 1 ? "document was" : "documents were"} indexed. ${UPLOAD_LIMIT_MESSAGE}`, "limit");
+      } else if (uploadErrors.length) {
+        const prefix = indexedCount ? `${indexedCount} of ${files.length} selected documents were indexed. ` : "";
+        setStatus(uploadStatus, `${prefix}${uploadErrors[0]}${uploadErrors.length > 1 ? ` (${uploadErrors.length - 1} more issue(s)).` : ""}`, "error");
+      } else if (indexedCount) {
+        setStatus(uploadStatus, `${indexedCount} ${indexedCount === 1 ? "document" : "documents"} indexed successfully.`, "success");
       }
-      if (!prompt) return;
+      if (!prompt || !dailyUsage?.chatAllowed) return;
     }
 
     $("sendLabel").textContent = "Thinking…";
@@ -792,7 +870,7 @@ chatForm.addEventListener("submit", async (event) => {
       if (!response.ok) {
         answer.textContent = data.error || `The request failed (${response.status}).`;
         if (data.code === "DAILY_LIMIT_REACHED") {
-          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: data.resetAt });
+          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: data.resetAt });
           setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
         } else if (data.code === "DAILY_USAGE_UNAVAILABLE") {
           await refreshDailyUsage();
@@ -815,7 +893,7 @@ chatForm.addEventListener("submit", async (event) => {
       }
       appendAnswerActions(answer, data.reply || "No response was returned.");
       if (data.conversationId) currentConversation = { id: data.conversationId };
-      $("prompt").value = "";
+      if ($("prompt").value.trim() === prompt) $("prompt").value = "";
       updateComposerLabel();
       setStatus(chatStatus, "Answer ready.", "success");
       await loadConversations();
@@ -828,13 +906,6 @@ chatForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus(uploadStatus, error?.message || "Upload failed. Please try again.");
   } finally {
-    if (stagedUploadPath) {
-      try {
-        await supabaseClient.storage.from("tmj-documents").remove([stagedUploadPath]);
-      } catch {
-        // A failed index request must not prevent the composer from recovering.
-      }
-    }
     isSubmitting = false;
     updateComposerLabel();
   }

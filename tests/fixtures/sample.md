@@ -1,0 +1,3 @@
+# Academic integrity
+
+TMJ PARSER FIXTURE: Academic integrity requires honest and responsible scholarship.

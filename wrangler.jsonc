@@ -8,6 +8,9 @@
     "SUPABASE_URL": "https://kiaaamxjtvenyaujpysf.supabase.co",
     "SUPABASE_ANON_KEY": "sb_publishable_F3MdZEjCS99N9oY9z7m9PQ_lwY0FUTr"
   },
+  "rules": [
+    { "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": false }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
