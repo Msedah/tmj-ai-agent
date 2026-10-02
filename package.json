@@ -6,13 +6,13 @@
   "description": "Education-only NWU student AI assistant.",
   "scripts": {
     "check": "node --check src/index.js && node --check src/nwu-search.js && node --check public/app.js",
-    "test": "node --test",
+    "test": "node --experimental-wasm-modules --test",
     "deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
-    "mammoth": "^1.9.1",
-    "pdf-parse": "^1.1.1"
+    "office-oxide-wasm": "0.1.8",
+    "officeparser": "8.1.0"
   },
   "devDependencies": {
     "wrangler": "^4.68.0"

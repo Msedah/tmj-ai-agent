@@ -22,10 +22,9 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(markup, /<section id="about"[^>]*hidden>/);
   assert.match(markup, /src="\/tmj-mark\.svg"/);
   assert.match(markup, /class="starter-prompt"/);
-  assert.match(markup, /max 2 MiB/);
-  assert.match(markup, /one document per day/);
+  assert.doesNotMatch(markup, /upload-hint|2\s*MiB|40\s*MiB|one document per day|Supported formats:/i);
   assert.match(markup, /independent study aid, not an official NWU service/i);
-  assert.match(markup, /Deleting a conversation does not delete its uploaded file or indexed text/i);
+  assert.match(markup, /Deleting a conversation does not delete uploaded files or indexed text/i);
   assert.match(markup, /Cloudflare Workers AI/);
   assert.match(markup, /daily usage counter linked to your account/i);
   assert.match(markup, /not question text or an AI-points balance/i);
@@ -191,9 +190,8 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     if (url === "/api/index-document") {
       if (rejectNextIndex) {
         rejectNextIndex = false;
-        return { ok: false, status: 413, json: async () => ({ error: "Maximum document size is 2 MiB.", code: "UPLOAD_TOO_LARGE" }) };
+        return { ok: false, status: 422, json: async () => ({ error: "The document could not be extracted." }) };
       }
-      usageSnapshot = { ...usageSnapshot, uploadAllowed: false, resetAt: "2026-10-02T00:00:00.000Z" };
       return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
     }
     if (url === "/api/chat") {
@@ -335,10 +333,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.authClose.listeners.get("click")[0]();
 
   elements.authDialog.open = true;
+  const usageChecksBeforeSignIn = fetchCalls.filter(call => call.url === "/api/usage").length;
   authStateListener("SIGNED_IN", { access_token: "test-token", user: { id: "test-user", email: "averyveryverylongemailaddress@example.com" } });
   assert.equal(elements.sendButton.disabled, true, "message sending waits until daily access can be checked");
   assert.equal(elements.sendLabel.textContent, "Checking access…");
   await new Promise(resolve => setImmediate(resolve));
+  assert.ok(fetchCalls.filter(call => call.url === "/api/usage").length > usageChecksBeforeSignIn, "sign-in automatically loads daily access without waiting for a focus event");
   assert.equal(elements.authDialog.open, false, "sign-in state closes an open auth dialog");
   assert.equal(elements.historyPanel.hidden, false);
   assert.equal(elements.historyToggle.hidden, false);
@@ -357,12 +357,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.prompt.listeners.get("input")[0]();
   elements.attachDocument.listeners.get("click")[0]();
   assert.equal(elements.documentFile.clickCount, 1, "attach button opens the native file picker");
-  elements.documentFile.files = [{ name: "too-large.pdf", size: 2 * 1024 * 1024 + 1, type: "application/pdf" }];
+  elements.documentFile.files = [{ name: "too-large.pdf", size: 40 * 1024 * 1024 + 1, type: "application/pdf" }];
   elements.documentFile.listeners.get("change")[0]();
-  assert.match(elements.uploadStatus.textContent, /Maximum file size is 2 MiB/);
+  assert.match(elements.uploadStatus.textContent, /too large to add/i);
   assert.equal(uploadCalls.length, 0, "oversize files never leave the browser");
   elements.attachDocument.listeners.get("click")[0]();
-  elements.documentFile.files = [{ name: "PADM101.pdf", size: 2048, type: "application/pdf" }];
+  elements.documentFile.files = [{ name: "PADM101.pdf", size: 2 * 1024 * 1024 + 1, type: "application/pdf" }];
   elements.documentFile.listeners.get("change")[0]();
   assert.equal(elements.attachmentPreview.hidden, false);
   assert.equal(elements.attachmentName.textContent, "PADM101.pdf");
@@ -372,9 +372,9 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
 
   rejectNextIndex = true;
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
-  assert.equal(uploadCalls.length, 1, "the first attempt uploads only the permitted-size document");
+  assert.equal(uploadCalls.length, 1, "the first attempt uploads the selected file");
   assert.equal(removeCalls.length, 1, "a rejected staged file is removed from private storage");
-  assert.match(elements.uploadStatus.textContent, /Maximum document size is 2 MiB/);
+  assert.match(elements.uploadStatus.textContent, /could not be extracted/i);
   assert.equal(elements.attachmentPreview.hidden, false, "the user can retry after fixing or replacing a rejected file");
 
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
@@ -384,12 +384,41 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.ok(indexCall, "indexing runs from the same composer submit");
   assert.equal(JSON.parse(indexCall.options.body).moduleCode, "PADM101");
   assert.equal(elements.attachmentPreview.hidden, true, "successful indexing clears the attachment chip");
-  assert.match(elements.uploadStatus.textContent, /Document indexed successfully.*upload another document tomorrow/);
-  assert.equal(elements.attachDocument.disabled, true, "the one-document-per-day cap disables further uploads");
-  assert.equal(elements.sendButton.disabled, false, "using the upload allowance does not block chat");
+  assert.match(elements.uploadStatus.textContent, /1 document indexed successfully/i);
+  assert.equal(elements.attachDocument.disabled, false, "successful indexing does not exhaust the daily upload budget");
+  assert.equal(elements.sendButton.disabled, false, "document uploads do not block chat");
+
+  elements.documentFile.files = [
+    { name: "PADM101-slides.pptx", size: 4096, type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
+    { name: "PADM101-notes.xlsx", size: 3072, type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+  ];
+  elements.documentFile.listeners.get("change")[0]();
+  assert.match(elements.attachmentName.textContent, /PADM101-slides\.pptx.*PADM101-notes\.xlsx/);
+  assert.doesNotMatch(elements.attachmentName.textContent, /KiB|MiB/);
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(uploadCalls.length, 4, "multiple selected files are uploaded and indexed one at a time");
+  assert.match(elements.uploadStatus.textContent, /2 documents indexed successfully/i);
+
+  const callsBeforeChatLockedUpload = fetchCalls.filter(call => call.url === "/api/index-document").length;
+  usageSnapshot = { chatAllowed: false, uploadAllowed: true, resetAt: "2026-10-02T00:00:00.000Z" };
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
+  elements.documentFile.files = [{ name: "chat-limit-does-not-block.pdf", size: 1024, type: "application/pdf" }];
+  elements.documentFile.listeners.get("change")[0]();
+  assert.equal(elements.sendButton.disabled, false, "document-only indexing remains available after chats are exhausted");
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(fetchCalls.filter(call => call.url === "/api/index-document").length, callsBeforeChatLockedUpload + 1);
+  assert.equal(fetchCalls.filter(call => call.url === "/api/chat").length, 0, "upload-only submit does not accidentally consume or send a chat");
+  usageSnapshot = { chatAllowed: true, uploadAllowed: true };
+  windowListeners.get("focus")[0]();
+  await new Promise(resolve => setImmediate(resolve));
 
   elements.prompt.value = "What does NWU publish about academic integrity?";
-  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  const sendPromise = elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(elements.sendButton.getAttribute("aria-busy"), "true", "send immediately exposes its in-progress state");
+  assert.match(elements.sendLabel.textContent, /Thinking|Sending/);
+  assert.equal(elements.messages.children.at(-2).textContent, "What does NWU publish about academic integrity?", "the student's message appears before the network response");
+  await sendPromise;
   const chatCall = fetchCalls.find(call => call.url === "/api/chat");
   assert.ok(chatCall, "academic question reaches the Worker");
   assert.match(chatCall.options.headers.Authorization, /^Bearer test-token$/);
