@@ -471,9 +471,9 @@ function updateComposerLabel() {
   if (attachDocument) attachDocument.disabled = uploadBlocked;
   if (documentFile) documentFile.disabled = uploadBlocked;
   if (label && !isSubmitting) {
-    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload & index") : "Ask TMJ AI"));
+    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload") : "Ask TMJ AI"));
   }
-  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload documents and ask question" : "Upload and index documents") : "Send message")));
+  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload and ask a question" : "Upload selected study material") : "Send message")));
 }
 
 $("attachDocument").addEventListener("click", () => {
@@ -511,7 +511,7 @@ documentFile.addEventListener("change", () => {
   $("attachmentName").textContent = files.map(file => file.name).join(", ");
   $("attachmentPreview").hidden = false;
   $("moduleCodeControl").hidden = false;
-  setStatus(uploadStatus, `${files.length} ${files.length === 1 ? "document" : "documents"} selected. Submit to upload and index them.`, "info");
+  setStatus(uploadStatus, "", "info");
   updateComposerLabel();
 });
 
@@ -850,7 +850,10 @@ chatForm.addEventListener("submit", async (event) => {
         const prefix = indexedCount ? `${indexedCount} of ${files.length} selected documents were indexed. ` : "";
         setStatus(uploadStatus, `${prefix}${uploadErrors[0]}${uploadErrors.length > 1 ? ` (${uploadErrors.length - 1} more issue(s)).` : ""}`, "error");
       } else if (indexedCount) {
-        setStatus(uploadStatus, `${indexedCount} ${indexedCount === 1 ? "document" : "documents"} indexed successfully.`, "success");
+        setStatus(uploadStatus, "", "success");
+      }
+      if (indexedCount && (!prompt || !dailyUsage?.chatAllowed)) {
+        addMessage("assistant", "Upload complete. Ask a question about your study material to get a response.");
       }
       if (!prompt || !dailyUsage?.chatAllowed) return;
     }
@@ -895,7 +898,7 @@ chatForm.addEventListener("submit", async (event) => {
       if (data.conversationId) currentConversation = { id: data.conversationId };
       if ($("prompt").value.trim() === prompt) $("prompt").value = "";
       updateComposerLabel();
-      setStatus(chatStatus, "Answer ready.", "success");
+      setStatus(chatStatus, "", "success");
       await loadConversations();
       await refreshDailyUsage();
     } catch {
