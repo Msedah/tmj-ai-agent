@@ -86,15 +86,15 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   const calls = [];
   const database = mockUsageDatabase(({ sql, bindings }) => {
     calls.push({ sql, bindings });
-    return sql.includes("INSERT INTO") ? { chat_count: 8, upload_count: 0 } : {
-      user_chat_count: 7, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 79
+    return sql.includes("INSERT INTO") ? { chat_count: 35, upload_count: 0 } : {
+      user_chat_count: 7, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 349
     };
   });
 
   assert.equal(utcUsageDay(now), "2026-10-01");
   assert.equal(nextUtcResetAt(now), "2026-10-02T00:00:00.000Z");
-  assert.equal(DAILY_CHAT_LIMIT, 8);
-  assert.equal(GLOBAL_DAILY_CHAT_LIMIT, 80);
+  assert.equal(DAILY_CHAT_LIMIT, 35);
+  assert.equal(GLOBAL_DAILY_CHAT_LIMIT, 350);
   assert.equal(DAILY_UPLOAD_LIMIT, 40 * 1024 * 1024);
   assert.equal(MAX_DAILY_USERS, 10);
   assert.equal(MAX_DOCUMENT_BYTES, 40 * 1024 * 1024);
@@ -115,7 +115,7 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
 
   const consumed = await consumeDailyUsage(database, "opaque-user-id", "chat", now);
   assert.equal(consumed.allowed, true);
-  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 8, 80, DAILY_UPLOAD_LIMIT, 10, 0]);
+  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 35, 350, DAILY_UPLOAD_LIMIT, 10, 0]);
   assert.match(calls[1].sql, /ON CONFLICT \(usage_date, user_id\) DO UPDATE/);
   assert.match(calls[1].sql, /RETURNING chat_count, upload_count/);
   assert.match(calls[1].sql, /\?3 = 'upload' OR daily_usage\.chat_count < \?4/);
@@ -136,7 +136,7 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   assert.equal(existingTester.resetAt, null);
 
   const chatsExhausted = await getDailyUsageStatus(mockUsageDatabase({
-    user_chat_count: 8, user_upload_count: 2, user_upload_bytes: 1024, global_chat_count: 80, user_active: 1, active_users_count: 10
+    user_chat_count: 35, user_upload_count: 2, user_upload_bytes: 1024, global_chat_count: 350, user_active: 1, active_users_count: 10
   }), "active-user", now);
   assert.equal(chatsExhausted.chatAllowed, false);
   assert.equal(chatsExhausted.uploadAllowed, true, "upload bytes have a separate daily budget from chats");
@@ -282,7 +282,7 @@ test("usage status requires authentication and returns eligibility without expos
     }), {
       SUPABASE_URL: "https://test-project.supabase.co",
       SUPABASE_ANON_KEY: "test-anon-key",
-      USAGE_DB: mockUsageDatabase({ user_chat_count: 8, user_upload_count: 1, user_upload_bytes: 0, global_chat_count: 80 })
+      USAGE_DB: mockUsageDatabase({ user_chat_count: 35, user_upload_count: 1, user_upload_bytes: 0, global_chat_count: 350 })
     });
     assert.equal(response.status, 200);
     const payload = await response.json();
@@ -412,8 +412,8 @@ test('document indexing keeps upload bytes separate from chat and blocks only wh
         prepare(sql) {
           if (sql.includes('INSERT INTO')) usageClaims += 1;
           return { bind() { return { first: async () => ({
-            user_chat_count: 8, user_upload_count: 1, user_upload_bytes: DAILY_UPLOAD_LIMIT - 1,
-            global_chat_count: 80, user_active: 1, active_users_count: 10
+            user_chat_count: 35, user_upload_count: 1, user_upload_bytes: DAILY_UPLOAD_LIMIT - 1,
+            global_chat_count: 350, user_active: 1, active_users_count: 10
           }) }; } };
         }
       }
@@ -433,7 +433,7 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
   const fixtures = ['sample.pdf', 'sample.docx'].map(name => ({ name, bytes: readFileSync(new URL(`./fixtures/${name}`, import.meta.url)) }));
   let uploadBytes = 0;
   let uploadCount = 0;
-  let chatCount = 8;
+  let chatCount = 35;
   let documentCount = 0;
   let chunkBatchCount = 0;
   let aiCalls = 0;
@@ -479,7 +479,7 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
               }
               return {
                 user_chat_count: chatCount, user_upload_count: uploadCount, user_upload_bytes: uploadBytes,
-                global_chat_count: 80, user_active: 1, active_users_count: 10
+                global_chat_count: 350, user_active: 1, active_users_count: 10
               };
             } }; } };
           }
@@ -490,7 +490,7 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
     }
     assert.equal(uploadCount, 2, 'multiple files are counted by bytes, not by a one-file-per-day rule');
     assert.equal(uploadBytes, fixtures.reduce((sum, file) => sum + file.bytes.byteLength, 0));
-    assert.equal(chatCount, 8, 'uploading documents does not consume chat points');
+    assert.equal(chatCount, 35, 'uploading documents does not consume chat points');
     assert.equal(documentCount, 2);
     assert.equal(chunkBatchCount, 2);
     assert.equal(aiCalls, 2);
@@ -530,7 +530,7 @@ test('upload claim denial after preflight prevents embedding and returns the ref
             usageChecks += 1;
             return usageChecks === 1
               ? { user_chat_count: 0, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 0, user_active: 0, active_users_count: 0 }
-              : { user_chat_count: 8, user_upload_count: 1, user_upload_bytes: DAILY_UPLOAD_LIMIT, global_chat_count: 80, user_active: 1, active_users_count: 10 };
+              : { user_chat_count: 35, user_upload_count: 1, user_upload_bytes: DAILY_UPLOAD_LIMIT, global_chat_count: 350, user_active: 1, active_users_count: 10 };
           } }; } };
         }
       }
@@ -576,15 +576,15 @@ test("failed document embeddings refund the atomic upload-byte claim", async () 
             if (sql.includes("INSERT INTO")) return { first: async () => {
               uploadBytes += bindings[7];
               uploadCount += 1;
-              return { chat_count: 8, upload_count: uploadCount };
+              return { chat_count: 35, upload_count: uploadCount };
             } };
             if (sql.includes("UPDATE daily_usage")) return { run: async () => {
               uploadBytes -= bindings[2];
               uploadCount -= 1;
             } };
             return { first: async () => ({
-              user_chat_count: 8, user_upload_count: uploadCount, user_upload_bytes: uploadBytes,
-              global_chat_count: 80, user_active: 1, active_users_count: 10
+              user_chat_count: 35, user_upload_count: uploadCount, user_upload_bytes: uploadBytes,
+              global_chat_count: 350, user_active: 1, active_users_count: 10
             }) };
           } };
         }

@@ -17,6 +17,10 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(composer, /id="documentFile"/);
   assert.match(composer, /id="attachDocument"/);
   assert.match(composer, /id="sendButton"/);
+  assert.ok(markup.indexOf('id="chatStatus"') < markup.indexOf('<form id="chatForm"'), "chat feedback appears above the composer");
+  assert.ok(markup.indexOf('id="uploadStatus"') < markup.indexOf('<form id="chatForm"'), "upload feedback appears above the composer");
+  assert.doesNotMatch(markup.slice(markup.indexOf("</form>"), markup.indexOf('class="disclaimer"')), /id="chatStatus"|id="uploadStatus"/);
+  assert.doesNotMatch(source, /Answer ready\./i);
   assert.match(markup, /id="sidebarCollapse"[^>]*aria-label="Hide left panel"/);
   assert.match(markup, /id="aboutToggle"[^>]*aria-expanded="false"/);
   assert.match(markup, /<section id="about"[^>]*hidden>/);
@@ -367,7 +371,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.attachmentPreview.hidden, false);
   assert.equal(elements.attachmentName.textContent, "PADM101.pdf");
   assert.equal(elements.moduleCodeControl.hidden, false);
-  assert.equal(elements.sendLabel.textContent, "Upload & index");
+  assert.equal(elements.sendLabel.textContent, "Upload");
   elements.moduleCode.value = "padm101";
 
   rejectNextIndex = true;
@@ -384,7 +388,8 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.ok(indexCall, "indexing runs from the same composer submit");
   assert.equal(JSON.parse(indexCall.options.body).moduleCode, "PADM101");
   assert.equal(elements.attachmentPreview.hidden, true, "successful indexing clears the attachment chip");
-  assert.match(elements.uploadStatus.textContent, /1 document indexed successfully/i);
+  assert.equal(elements.uploadStatus.textContent, "", "successful indexing does not leave status clutter by the composer");
+  assert.match(elements.messages.children.at(-1).textContent, /Upload complete.*ask a question/i, "upload-only indexing receives a visible chat acknowledgment");
   assert.equal(elements.attachDocument.disabled, false, "successful indexing does not exhaust the daily upload budget");
   assert.equal(elements.sendButton.disabled, false, "document uploads do not block chat");
 
@@ -397,7 +402,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.doesNotMatch(elements.attachmentName.textContent, /KiB|MiB/);
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
   assert.equal(uploadCalls.length, 4, "multiple selected files are uploaded and indexed one at a time");
-  assert.match(elements.uploadStatus.textContent, /2 documents indexed successfully/i);
+  assert.match(elements.messages.children.at(-1).textContent, /Upload complete.*ask a question/i, "multi-file upload receives the same clear completion feedback");
 
   const callsBeforeChatLockedUpload = fetchCalls.filter(call => call.url === "/api/index-document").length;
   usageSnapshot = { chatAllowed: false, uploadAllowed: true, resetAt: "2026-10-02T00:00:00.000Z" };

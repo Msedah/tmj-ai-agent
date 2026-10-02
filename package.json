@@ -12,7 +12,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
     "office-oxide-wasm": "0.1.8",
-    "officeparser": "8.1.0"
+    "officeparser": "8.1.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "wrangler": "^4.68.0"

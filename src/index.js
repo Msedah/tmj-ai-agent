@@ -1,7 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 import { OfficeParser } from "officeparser";
-import { WasmDocument } from "office-oxide-wasm/bundler";
+import { extractText, getDocumentProxy } from "unpdf";
 import { fetchNwuPublicDocument, normalizePublicNwuUrl, searchNwuLiveSources } from "./nwu-search.js";
+
+let WasmDocument;
+if (typeof globalThis.WebSocketPair === "function") {
+  const [officeOxide, wasmAsset] = await Promise.all([
+    import("office-oxide-wasm/web"),
+    import("../node_modules/office-oxide-wasm/web/office_oxide_bg.wasm")
+  ]);
+  officeOxide.initSync({ module: wasmAsset.default });
+  WasmDocument = officeOxide.WasmDocument;
+} else {
+  ({ WasmDocument } = await import("office-oxide-wasm/bundler"));
+}
 
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
   "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
@@ -36,6 +48,16 @@ export async function extractDocumentText(fileName, bytes) {
   if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(extension)) throw new Error("Unsupported document format.");
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (extension === "txt") return new TextDecoder("utf-8", { fatal: false }).decode(data);
+
+  if (extension === "pdf") {
+    const document = await getDocumentProxy(new Uint8Array(data));
+    try {
+      const result = await extractText(document, { mergePages: true });
+      return String(result?.text || "");
+    } finally {
+      await document.destroy?.();
+    }
+  }
 
   if (LEGACY_OFFICE_EXTENSIONS.has(extension)) {
     let document;
@@ -132,8 +154,8 @@ EVIDENCE AND ACCURACY:
 const CHAT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 const EMBEDDING_DIMENSIONS = 384;
-export const DAILY_CHAT_LIMIT = 8;
-export const GLOBAL_DAILY_CHAT_LIMIT = 80;
+export const DAILY_CHAT_LIMIT = 35;
+export const GLOBAL_DAILY_CHAT_LIMIT = 350;
 export const DAILY_UPLOAD_LIMIT = 40 * 1024 * 1024;
 export const MAX_DAILY_USERS = 10;
 export const MAX_DOCUMENT_BYTES = DAILY_UPLOAD_LIMIT;
