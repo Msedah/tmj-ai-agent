@@ -1,15 +1,16 @@
 # TMJ AI Agent
 
-Education-only academic assistant for North-West University (NWU) students. The active deployment is a **Cloudflare Worker with static assets**, backed by Supabase Auth/Postgres/Storage and Cloudflare Workers AI.
+General-purpose AI assistant with a focus on North-West University (NWU) student support. The active deployment is a **Cloudflare Worker with static assets**, backed by Supabase Auth/Postgres/Storage and Cloudflare Workers AI.
 
 ## Features
 
 - Email/password authentication through Supabase Auth; email is the account label and is shortened in the sidebar when long.
 - User-scoped saved conversations and private document uploads.
 - PDF, DOCX, TXT, and Markdown text extraction.
-- Retrieval-augmented academic answers using Cloudflare Workers AI and Supabase pgvector.
+- General-purpose answers plus retrieval-augmented, conversation-scoped document support using Cloudflare Workers AI and Supabase pgvector.
+- Trusted runtime date/time context for current-date questions and date calculations; South African local time is the default unless a timezone is specified.
 - Optional ingestion of public NWU resources through a protected endpoint.
-- Academic-only scope guard; the assistant complements rather than replaces NWU instructions.
+- NWU-focused help that complements rather than replaces official university instructions; general questions are also in scope.
 - Responsive chat interface with keyboard focus states and accessible live status messages.
 
 NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. Do not scrape private eFundi courses or ask students for NWU passwords. Students should only upload material they are authorised to use.
