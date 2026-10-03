@@ -777,7 +777,7 @@ chatForm.addEventListener("submit", async (event) => {
   const prompt = $("prompt").value.trim();
   const files = Array.from(documentFile.files || []);
   if (!prompt && !files.length) {
-    setStatus(chatStatus, "Enter an academic question or attach a document first.");
+    setStatus(chatStatus, "Enter a question or attach a document first.");
     $("prompt").focus();
     return;
   }
@@ -891,7 +891,7 @@ chatForm.addEventListener("submit", async (event) => {
     }
 
     $("sendLabel").textContent = "Thinking…";
-    setStatus(chatStatus, "Searching current public NWU pages and your relevant study material…", "info");
+    setStatus(chatStatus, "Looking in this chat’s uploads and other relevant sources…", "info");
     const userMessage = addMessage("user", prompt);
     const answer = addMessage("assistant", "Searching academic material…");
 
