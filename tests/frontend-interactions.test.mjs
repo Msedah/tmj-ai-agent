@@ -106,7 +106,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const elements = Object.fromEntries(ids.map(id => [id, new ElementMock(id)]));
   elements.about.hidden = true;
   elements.sidebarCollapse.textContent = "Hide left panel";
-  elements.aboutToggle.textContent = "About & privacy";
+  elements.aboutToggle.textContent = "About";
   elements.chatForm.reset = () => {
     elements.prompt.value = "";
     elements.documentFile.value = "";
@@ -303,7 +303,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.sidebarToggle.listeners.get("click")[0]();
   elements.aboutToggle.listeners.get("click")[0]();
   assert.equal(elements.about.hidden, false, "About is revealed only after the explicit toggle");
-  assert.equal(elements.aboutToggle.textContent, "Hide About");
+  assert.equal(elements.aboutToggle.textContent, "About");
   assert.equal(elements.aboutToggle.getAttribute("aria-expanded"), "true");
   assert.equal(bodyClasses.has("sidebar-open"), false, "opening About closes the mobile menu");
   elements.aboutToggle.listeners.get("click")[0]();

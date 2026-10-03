@@ -106,7 +106,6 @@ aboutToggle?.addEventListener("click", () => {
   const about = $("about");
   const show = Boolean(about?.hidden);
   if (about) about.hidden = !show;
-  aboutToggle.textContent = show ? "Hide About" : "About";
   aboutToggle.setAttribute("aria-expanded", String(show));
   if (show) about?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   if (isMobileSidebar()) setSidebarOpen(false);
