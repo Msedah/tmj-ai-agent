@@ -85,9 +85,14 @@ a { color: inherit; }
   transition: background 140ms ease;
 }
 .conversation:hover, .conversation:focus-visible { background: #eceef0; }
-.delete-conversation { min-height: 32px; flex: 0 0 auto; padding: 5px 8px; color: #9b4541; background: transparent; border: 1px solid transparent; border-radius: 7px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
-.delete-conversation:hover, .delete-conversation:focus-visible { color: #812c29; background: #fff0ee; border-color: #f0ceca; }
-.delete-conversation:disabled { opacity: 0.6; cursor: wait; }
+.delete-conversation { min-height: 34px; min-width: 74px; display: inline-flex; flex: 0 0 auto; flex-direction: row-reverse; align-items: center; justify-content: center; gap: 7px; padding: 5px 9px; color: #9b3934; background: linear-gradient(180deg, #fff8f7 0%, #fff0ed 100%); border: 1px solid #f0d5d1; border-radius: 10px; box-shadow: 0 1px 3px rgba(111, 42, 36, 0.08); font-size: 0.73rem; font-weight: 750; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+.delete-conversation:hover:not(:disabled) { color: #812c29; background: linear-gradient(180deg, #ffefed 0%, #ffe4e0 100%); border-color: #e9b8b2; box-shadow: 0 3px 8px rgba(111, 42, 36, 0.13); }
+.delete-conversation:focus-visible { outline: 3px solid rgba(165, 51, 41, 0.22); outline-offset: 2px; }
+.delete-conversation:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
+.delete-conversation:disabled { opacity: 0.65; cursor: wait; box-shadow: none; }
+.delete-icon { position: relative; width: 11px; height: 12px; display: inline-block; margin-top: 3px; border: 1.6px solid currentColor; border-top: 0; border-radius: 0 0 3px 3px; }
+.delete-icon::before { position: absolute; top: -3px; left: -2px; width: 12px; height: 1.6px; border-radius: 2px; background: currentColor; content: ""; }
+.delete-icon::after { position: absolute; top: -5px; left: 2px; width: 4px; height: 2px; border: 1.4px solid currentColor; border-bottom: 0; border-radius: 2px 2px 0 0; content: ""; }
 .muted { color: var(--muted); font-size: 0.84rem; }
 #authForm label { margin-top: 4px; color: #3e4a52; font-size: 0.8rem; font-weight: 700; }
 .module-code-control input, #authForm input {
@@ -212,10 +217,15 @@ a { color: inherit; }
 .remove-attachment:hover { color: var(--danger); text-decoration: underline; }
 .module-code-control input { width: 170px; min-height: 34px; padding: 6px 8px; font-size: 0.75rem; }
 .send-button, .button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 13px; color: #fff; background: var(--green); border: 1px solid transparent; border-radius: 11px; font-weight: 700; line-height: 1.2; cursor: pointer; transition: background 150ms ease, transform 150ms ease; }
+.send-button { min-height: 44px; padding: 10px 15px; background: linear-gradient(135deg, #0a8c77 0%, #066555 100%); border-color: rgba(6, 101, 85, 0.2); border-radius: 13px; box-shadow: 0 5px 13px rgba(8, 122, 104, 0.22); transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease; }
 .send-button:hover:not(:disabled), .button:hover:not(:disabled) { background: var(--green-dark); }
 .send-button:active:not(:disabled), .button:active:not(:disabled) { transform: translateY(1px); }
 .send-button:disabled, .button:disabled { opacity: 0.55; cursor: not-allowed; }
-.send-button span:last-child { width: 21px; height: 21px; display: grid; place-items: center; color: var(--green); background: #fff; border-radius: 7px; font-size: 1rem; }
+.send-button:hover:not(:disabled) { background: linear-gradient(135deg, #087a68 0%, #04594c 100%); box-shadow: 0 7px 17px rgba(8, 122, 104, 0.28); transform: translateY(-1px); }
+.send-button:active:not(:disabled) { transform: translateY(0) scale(0.985); }
+.send-button:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 3px; }
+.send-button:disabled { box-shadow: none; }
+.send-button span:last-child { width: 23px; height: 23px; display: grid; place-items: center; color: var(--green-dark); background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); font-size: 1rem; font-weight: 800; }
 .composer-status-region { width: 100%; }
 .composer-status-region .status { padding: 0 6px; }
 .chat-status { padding: 0 6px; }

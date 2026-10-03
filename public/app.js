@@ -951,13 +951,21 @@ chatForm.addEventListener("submit", async (event) => {
   }
 });
 
+function setDeleteButtonState(button, label) {
+  button.replaceChildren();
+  button.textContent = label;
+  if (label === "Delete") {
+    const deleteIcon = document.createElement("span");
+    deleteIcon.className = "delete-icon";
+    deleteIcon.setAttribute("aria-hidden", "true");
+    button.appendChild(deleteIcon);
+  }
+}
+
 async function deleteConversation(id, button) {
   if (!session || !id) return;
-  const message = "Delete this conversation, its messages, and its uploaded documents? This cannot be undone.";
-  if (typeof window.confirm === "function" && !window.confirm(message)) return;
-
   button.disabled = true;
-  button.textContent = "Deleting…";
+  setDeleteButtonState(button, "Deleting…");
   try {
     const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -977,7 +985,7 @@ async function deleteConversation(id, button) {
     setStatus(chatStatus, error?.message || "Could not delete this conversation. Please try again.");
   } finally {
     button.disabled = false;
-    button.textContent = "Delete";
+    setDeleteButtonState(button, "Delete");
   }
 }
 
@@ -1016,7 +1024,7 @@ async function loadConversations() {
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className = "delete-conversation";
-      deleteButton.textContent = "Delete";
+      setDeleteButtonState(deleteButton, "Delete");
       deleteButton.setAttribute("aria-label", `Delete conversation: ${title}`);
       deleteButton.addEventListener("click", event => {
         event.preventDefault();
