@@ -5,6 +5,8 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const markup = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const aboutMarkup = readFileSync(new URL("../public/about.html", import.meta.url), "utf8");
+const aboutScript = readFileSync(new URL("../public/about.js", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
 
  test("Supabase client uses the standard project API hostname", () => {
@@ -25,30 +27,54 @@ test("document attachment is inside the message composer and developer contact i
   assert.doesNotMatch(source, /setStatus\(chatStatus,\s*["']Conversation deleted\./);
   assert.match(markup, /id="sidebarCollapse"[^>]*aria-label="Hide left panel"/);
   const sidebar = markup.match(/<aside[^>]*id="appSidebar"[\s\S]*?<\/aside>/)?.[0] || "";
-  assert.match(sidebar, /id="aboutToggle"[^>]*aria-expanded="false">About<\/button>/);
-  assert.ok(sidebar.indexOf('id="aboutToggle"') > sidebar.indexOf('id="sidebarCollapse"'), "About sits at the bottom of the left panel");
+  assert.match(sidebar, /<a class="about-link" href="\/about\.html"[^>]*>About<\/a>/);
+  assert.ok(sidebar.indexOf('class="about-link"') > sidebar.indexOf('id="sidebarCollapse"'), "About sits at the bottom of the left panel");
   assert.match(markup, /<textarea id="prompt" rows="1"/);
   assert.match(markup, /id="sendLabel">Send message<\/span>/);
   assert.doesNotMatch(markup, /class="disclaimer"/);
-  assert.match(markup, /<section id="about"[^>]*hidden>/);
+  assert.doesNotMatch(markup, /id="aboutToggle"|id="aboutInfoTitle"/);
   assert.match(markup, /src="\/tmj-mark\.svg"/);
   assert.match(markup, /class="starter-prompt"/);
   assert.doesNotMatch(markup, /upload-hint|2\s*MiB|40\s*MiB|one document per day|Supported formats:/i);
-  assert.match(markup, /independent study companion, not an official North-West University service/i);
-  assert.match(markup, /Deleting that conversation also deletes its uploads and indexed text/i);
-  assert.match(markup, /stay with the conversation where they were added/i);
-  assert.match(markup, /Cloudflare Workers AI/);
-  assert.match(markup, /daily usage counter linked to your account/i);
-  assert.match(markup, /not question text or an AI-points balance/i);
-  assert.match(markup, /00:00 UTC \(02:00 South African time\)/);
-  assert.match(markup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
-  assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
-  assert.match(markup, /Live NWU public search receives topic keywords/);
+  assert.match(aboutMarkup, /<h1>About<\/h1>/);
+  assert.match(aboutMarkup, /<a class="about-back-button" href="\/" data-about-back[^>]*>[\s\S]*?<span>Back<\/span>/);
+  assert.match(aboutMarkup, /independent study companion, not an official North-West University service/i);
+  assert.match(aboutMarkup, /Deleting that conversation also deletes its uploads and indexed text/i);
+  assert.match(aboutMarkup, /stay with the conversation where they were added/i);
+  assert.match(aboutMarkup, /Cloudflare Workers AI/);
+  assert.match(aboutMarkup, /daily usage counter linked to your account/i);
+  assert.match(aboutMarkup, /not question text or an AI-points balance/i);
+  assert.match(aboutMarkup, /00:00 UTC \(02:00 South African time\)/);
+  assert.match(aboutMarkup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
+  assert.match(aboutMarkup, /Live NWU public search receives topic keywords/);
+  assert.match(aboutScript, /window\.history\.back\(\)/);
+  assert.match(aboutScript, /cameFromChat/);
   assert.match(styles, /\.delete-conversation:focus-visible/);
   assert.match(styles, /\.send-button:focus-visible/);
+  assert.match(styles, /\.about-back-button:focus-visible/);
   assert.match(styles, /\.composer textarea[^\n]*resize: none/);
   assert.match(source, /deleteIcon\.className = "delete-icon"/);
+});
+
+test("About Back returns to the originating chat and falls back home for direct visits", () => {
+  const runBack = (referrer, historyLength) => {
+    const listeners = new Map();
+    const history = { length: historyLength, backCount: 0, back() { this.backCount += 1; } };
+    const link = { addEventListener(name, handler) { listeners.set(name, handler); } };
+    const context = vm.createContext({
+      document: { referrer, querySelector: () => link },
+      window: { location: { origin: "https://tmj-ai-agent.example" }, history },
+      URL
+    });
+    vm.runInContext(aboutScript, context);
+    let prevented = false;
+    listeners.get("click")({ preventDefault() { prevented = true; } });
+    return { backCount: history.backCount, prevented };
+  };
+
+  assert.deepEqual(runBack("https://tmj-ai-agent.example/?utm_source=test", 2), { backCount: 1, prevented: true });
+  assert.deepEqual(runBack("https://external.example/", 1), { backCount: 0, prevented: false });
 });
 
 class ElementMock {
@@ -101,12 +127,10 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     "chatForm", "chatStatus", "uploadStatus", "prompt", "messages", "newChat",
     "attachmentControls", "documentFile", "attachDocument", "attachmentPreview", "attachmentName",
     "removeAttachment", "moduleCodeControl", "moduleCode", "sendButton", "sendLabel",
-    "historyPanel", "conversationList", "appStatus", "sidebarToggle", "sidebarOverlay", "sidebarCollapse", "aboutToggle", "about", "historyToggle"
+    "historyPanel", "conversationList", "appStatus", "sidebarToggle", "sidebarOverlay", "sidebarCollapse", "historyToggle"
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new ElementMock(id)]));
-  elements.about.hidden = true;
   elements.sidebarCollapse.textContent = "Hide left panel";
-  elements.aboutToggle.textContent = "About";
   elements.chatForm.reset = () => {
     elements.prompt.value = "";
     elements.documentFile.value = "";
@@ -301,15 +325,6 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.sidebarCollapse.listeners.get("click")[0]();
   assert.equal(bodyClasses.has("sidebar-open"), false, "the bottom sidebar control closes the mobile menu");
   elements.sidebarToggle.listeners.get("click")[0]();
-  elements.aboutToggle.listeners.get("click")[0]();
-  assert.equal(elements.about.hidden, false, "About is revealed only after the explicit toggle");
-  assert.equal(elements.aboutToggle.textContent, "About");
-  assert.equal(elements.aboutToggle.getAttribute("aria-expanded"), "true");
-  assert.equal(bodyClasses.has("sidebar-open"), false, "opening About closes the mobile menu");
-  elements.aboutToggle.listeners.get("click")[0]();
-  assert.equal(elements.about.hidden, true, "the About toggle hides the information again");
-  assert.equal(elements.aboutToggle.textContent, "About");
-
   mobileViewport = false;
   elements.sidebarCollapse.listeners.get("click")[0]();
   assert.equal(bodyClasses.has("sidebar-collapsed"), true, "the desktop sidebar collapses to a narrow rail");

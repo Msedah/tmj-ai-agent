@@ -230,13 +230,23 @@ a { color: inherit; }
 .composer-status-region .status { padding: 0 6px; }
 .chat-status { padding: 0 6px; }
 .about-control { width: 100%; margin: 0; padding: 0; }
-.about-toggle { width: 100%; min-height: 38px; display: flex; align-items: center; padding: 8px 10px; color: #4d5b60; background: #fff; border: 1px solid #e1e4e7; border-radius: 9px; text-align: left; font-size: 0.82rem; font-weight: 650; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
-.about-toggle:hover { color: var(--green-dark); background: #f3f7f5; border-color: #cdded5; }
-.about-toggle:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 2px; }
-.about { width: min(820px, calc(100% - 40px)); display: grid; gap: 10px; margin: 0 auto 32px; padding: 18px 22px; color: #5f6c73; background: #f8fbf9; border: 1px solid #e3ece7; border-radius: 14px; }
-.about h2 { margin: 0 0 5px; color: #35434a; font-size: 0.9rem; }
-.about p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
-.about strong { color: #38564b; }
+.about-link { width: 100%; min-height: 38px; display: flex; align-items: center; padding: 8px 10px; color: #4d5b60; background: #fff; border: 1px solid #e1e4e7; border-radius: 9px; font-size: 0.82rem; font-weight: 650; text-decoration: none; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
+.about-link:hover { color: var(--green-dark); background: #f3f7f5; border-color: #cdded5; }
+.about-link:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 2px; }
+.about-page-body { min-height: 100vh; background: linear-gradient(180deg, #f7faf8 0%, #fff 44%); }
+.about-page-shell { width: min(820px, calc(100% - 32px)); min-height: 100vh; display: flex; flex-direction: column; margin: 0 auto; padding: clamp(28px, 7vh, 64px) 0 20px; }
+.about-page-heading { margin-bottom: 22px; }
+.about-page-heading .eyebrow { margin-bottom: 8px; }
+.about-page-heading h1 { margin: 0; color: #202b33; font-size: clamp(1.8rem, 5vw, 2.45rem); letter-spacing: -0.045em; line-height: 1.1; }
+.about-page-heading p { max-width: 620px; margin: 12px 0 0; color: #6b777e; font-size: 1rem; line-height: 1.55; }
+.about-page-card { display: grid; gap: 14px; padding: clamp(18px, 4vw, 28px); color: #5f6c73; background: #fff; border: 1px solid #e1eae5; border-radius: 18px; box-shadow: 0 12px 36px rgba(30, 52, 43, 0.07); }
+.about-page-card h2 { margin: 0 0 3px; color: #35434a; font-size: 1.05rem; }
+.about-page-card p { margin: 0; font-size: 0.9rem; line-height: 1.65; }
+.about-page-card strong { color: #38564b; }
+.about-page-footer { margin-top: auto; padding: 24px 0 8px; }
+.about-back-button { min-height: 44px; display: inline-flex; align-items: center; gap: 9px; padding: 10px 16px; color: #fff; background: linear-gradient(135deg, #0a8c77 0%, #066555 100%); border: 1px solid rgba(6, 101, 85, 0.2); border-radius: 12px; box-shadow: 0 5px 13px rgba(8, 122, 104, 0.18); font-size: 0.9rem; font-weight: 700; text-decoration: none; transition: background 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+.about-back-button:hover { background: linear-gradient(135deg, #087a68 0%, #04594c 100%); box-shadow: 0 7px 17px rgba(8, 122, 104, 0.24); transform: translateY(-1px); }
+.about-back-button:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 3px; }
 
 .sidebar-overlay { display: none; }
 #authDialog { width: min(430px, calc(100% - 32px)); max-width: 430px; padding: 0; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 28px 90px rgba(13, 30, 36, 0.25); }
@@ -281,7 +291,6 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .welcome { padding: 26px 10px 36px; }
   .starter-prompts { gap: 6px; margin-top: 17px; }
   .starter-prompt { min-height: 36px; padding: 7px 10px; font-size: 0.73rem; }
-  .about { margin-bottom: 22px; }
   .composer-bottom { align-items: flex-end; gap: 6px; }
   .attachment-controls { gap: 5px; }
   .attachment-preview { max-width: 40vw; }
@@ -294,6 +303,9 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .composer { gap: 5px; padding: 7px; border-radius: 15px; }
   .composer textarea { min-height: 32px; padding: 5px 7px; font-size: 0.92rem; }
   .attach-button { min-height: 34px; padding: 6px 8px; }
+  .about-page-shell { width: min(100% - 24px, 820px); padding-top: 32px; }
+  .about-page-heading p { font-size: 0.92rem; }
+  .about-page-card p { font-size: 0.84rem; }
   .module-code-control input { width: min(150px, 38vw); }
   .send-button { min-height: 38px; gap: 5px; padding: 8px 9px; font-size: 0.78rem; }
   .send-button span:last-child { width: 19px; height: 19px; }

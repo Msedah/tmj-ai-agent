@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7faf8">
+    <meta name="description" content="About TMJ AI Agent, its study-support focus, and how conversations and uploads are handled.">
+    <title>About | TMJ AI Agent</title>
+    <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="about-page-body">
+    <main class="about-page-shell">
+      <header class="about-page-heading">
+        <p class="eyebrow">TMJ AI AGENT</p>
+        <h1>About</h1>
+        <p>A helpful AI companion for everyday questions, with focused support for NWU students and their course material.</p>
+      </header>
+
+      <section class="about-page-card" aria-labelledby="aboutInfoTitle">
+        <h2 id="aboutInfoTitle">About TMJ AI and your data</h2>
+        <p>TMJ AI Agent is an independent study companion, not an official North-West University service or endorsement. It complements eFundi and lecturer guidance; it does not replace them.</p>
+        <p><strong>Conversations:</strong> Your signed-in questions and answers are saved to your account. You can delete a conversation and its messages from Recent conversations.</p>
+        <p><strong>Uploads:</strong> Uploaded files and their indexed text stay with the conversation where they were added, so you can return to that chat and continue asking about them. Deleting that conversation also deletes its uploads and indexed text. Do not upload confidential, identifying, or sensitive material.</p>
+        <p><strong>Processing:</strong> Your question and relevant retrieved passages may be processed by Cloudflare Workers AI. Live NWU public search receives topic keywords from your question.</p>
+        <p><strong>Daily access:</strong> A minimal daily usage counter linked to your account helps share the pilot's free AI allowance fairly. It stores the UTC date, chat/upload counts and upload bytes, not question text or an AI-points balance. Access renews at 00:00 UTC (02:00 South African time).</p>
+        <p><strong>Ratings:</strong> Helpful/not-helpful selections stay on this page and are not sent to TMJ in this version.</p>
+      </section>
+
+      <footer class="about-page-footer">
+        <a class="about-back-button" href="/" data-about-back aria-label="Back to TMJ AI Agent chat">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6M9 12h12"/></svg>
+          <span>Back</span>
+        </a>
+      </footer>
+    </main>
+    <script src="/about.js" defer></script>
+  </body>
+</html>
