@@ -62,6 +62,10 @@ function formatMiB(byteCount) {
   return `${(Number(byteCount || 0) / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+function formatNeurons(value) {
+  return Number(value || 0).toLocaleString("en-ZA", { maximumFractionDigits: 2 });
+}
+
 function renderUsers(users) {
   adminUsers.replaceChildren();
   if (!users.length) {
@@ -83,7 +87,7 @@ function renderUsers(users) {
     email.textContent = account.email || `Account ${String(account.userId).slice(0, 8)}`;
     const details = document.createElement("p");
     details.className = "admin-user-details";
-    details.textContent = `${account.chatCount} chat requests used · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)}`;
+    details.textContent = `${account.chatCount} chat requests used · about ${formatNeurons(account.aiNeuronsUsed)} Neurons used / ${formatNeurons(account.aiNeuronsReserved)} held · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)}`;
     identity.append(email, details);
 
     const ratio = document.createElement("strong");
@@ -131,6 +135,11 @@ function renderDashboard(data) {
   adminEl("totalChatsValue").textContent = `${data.totalChats} / ${data.sharedChatLimit}`;
   adminEl("totalChatsCaption").textContent = `of ${data.sharedChatLimit} shared per day`;
   adminEl("sharedRemainingValue").textContent = String(data.sharedChatsRemaining);
+  const estimatedNeurons = data.estimatedNeurons || {};
+  adminEl("sharedNeuronsValue").textContent = formatNeurons(estimatedNeurons.sharedCommitted);
+  adminEl("sharedNeuronsCaption").textContent = `${formatNeurons(estimatedNeurons.sharedRemaining)} remaining of ${formatNeurons(estimatedNeurons.sharedLimit)} shared-user pool`;
+  adminEl("ownerNeuronsValue").textContent = formatNeurons(estimatedNeurons.ownerCommitted);
+  adminEl("ownerNeuronsCaption").textContent = `${formatNeurons(estimatedNeurons.ownerRemaining)} remaining of ${formatNeurons(estimatedNeurons.ownerLimit)} reserved for this account`;
   adminEl("uploadsValue").textContent = String(data.totalUploads);
   adminEl("uploadsCaption").textContent = formatMiB(data.totalUploadBytes);
   const day = new Date(`${data.utcDay}T00:00:00Z`);
