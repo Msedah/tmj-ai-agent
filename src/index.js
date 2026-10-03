@@ -201,6 +201,7 @@ export const DAILY_UPLOAD_LIMIT_MESSAGE = "You've reached today's document uploa
 const DAILY_USAGE_STATUS_QUERY = `
   SELECT
     COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_chat_count,
+    COALESCE((SELECT chat_limit FROM daily_chat_allocations WHERE user_id = ?2), ?3) AS user_chat_limit,
     COALESCE((SELECT upload_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_count,
     COALESCE((SELECT upload_bytes FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_bytes,
     COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS global_chat_count,
@@ -217,14 +218,14 @@ const DAILY_USAGE_CONSUME_QUERY = `
   WHERE (?3 = 'upload' OR (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5)
     AND (EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2)
       OR (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) < ?7)
-    AND (?3 = 'upload' OR COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < ?4)
+    AND (?3 = 'upload' OR COALESCE((SELECT chat_count FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) < COALESCE((SELECT chat_limit FROM daily_chat_allocations WHERE user_id = ?2), ?4))
     AND (?3 = 'chat' OR COALESCE((SELECT upload_bytes FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) + ?8 <= ?6)
   ON CONFLICT (usage_date, user_id) DO UPDATE SET
     chat_count = daily_usage.chat_count + CASE WHEN ?3 = 'chat' THEN 1 ELSE 0 END,
     upload_count = daily_usage.upload_count + CASE WHEN ?3 = 'upload' THEN 1 ELSE 0 END,
     upload_bytes = daily_usage.upload_bytes + CASE WHEN ?3 = 'upload' THEN ?8 ELSE 0 END
   WHERE (?3 = 'upload' OR (SELECT COALESCE(SUM(chat_count), 0) FROM daily_usage WHERE usage_date = ?1) < ?5)
-    AND (?3 = 'upload' OR daily_usage.chat_count < ?4)
+    AND (?3 = 'upload' OR daily_usage.chat_count < COALESCE((SELECT chat_limit FROM daily_chat_allocations WHERE user_id = ?2), ?4))
     AND (?3 = 'chat' OR daily_usage.upload_bytes + ?8 <= ?6)
   RETURNING chat_count, upload_count
 `;
@@ -241,15 +242,16 @@ export function nextUtcResetAt(now = new Date()) {
 export async function getDailyUsageStatus(database, userId, now = new Date()) {
   if (!database || typeof database.prepare !== "function") throw new Error("Daily usage database is not configured.");
   const day = utcUsageDay(now);
-  const row = await database.prepare(DAILY_USAGE_STATUS_QUERY).bind(day, String(userId)).first();
+  const row = await database.prepare(DAILY_USAGE_STATUS_QUERY).bind(day, String(userId), DAILY_CHAT_LIMIT).first();
   const userChats = Number(row?.user_chat_count || 0);
   const userUploads = Number(row?.user_upload_count || 0);
   const uploadBytesUsed = Number(row?.user_upload_bytes || 0);
   const globalChats = Number(row?.global_chat_count || 0);
+  const userChatLimit = Math.min(GLOBAL_DAILY_CHAT_LIMIT, Math.max(0, Number(row?.user_chat_limit ?? DAILY_CHAT_LIMIT)));
   const userActive = Number(row?.user_active || 0) > 0;
   const activeUsers = Number(row?.active_users_count || 0);
   const canJoinPilot = userActive || activeUsers < MAX_DAILY_USERS;
-  const chatAllowed = canJoinPilot && userChats < DAILY_CHAT_LIMIT && globalChats < GLOBAL_DAILY_CHAT_LIMIT;
+  const chatAllowed = canJoinPilot && userChats < userChatLimit && globalChats < GLOBAL_DAILY_CHAT_LIMIT;
   const uploadAllowed = canJoinPilot && uploadBytesUsed < DAILY_UPLOAD_LIMIT;
   return {
     chatAllowed,
@@ -306,6 +308,9 @@ export default {
       });
     }
     if (url.pathname === "/api/usage") return handleUsageStatus(request, env);
+    if (url.pathname === "/api/admin/dashboard") return handleAdminDashboard(request, env);
+    const adminLimitMatch = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]{36})\/chat-limit$/i);
+    if (adminLimitMatch) return handleAdminChatLimit(request, env, adminLimitMatch[1]);
     if (url.pathname === "/api/chat") return handleChat(request, env);
     if (url.pathname === "/api/index-document") return handleDocumentIndex(request, env);
     if (url.pathname === "/api/index-nwu") return handleNwuIndex(request, env);
@@ -342,6 +347,137 @@ async function handleUsageStatus(request, env) {
     });
   } catch {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+}
+
+async function authorizeAdmin(request, env) {
+  const auth = await authenticate(request, env);
+  if (auth.error) return { error: auth.error };
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { error: json(503, { error: "Admin access is not configured.", code: "ADMIN_NOT_CONFIGURED" }) };
+  }
+
+  try {
+    const adminClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
+    const { data, error } = await adminClient.from("tmj_admin_users")
+      .select("user_id")
+      .eq("user_id", auth.user.id)
+      .maybeSingle();
+    if (error) return { error: json(503, { error: "Could not verify administrator access.", code: "ADMIN_AUTH_UNAVAILABLE" }) };
+    if (!data) {
+      return { error: json(403, {
+        error: "Admin access is not enabled for this account.",
+        code: "ADMIN_NOT_ALLOWED",
+        userId: auth.user.id
+      }) };
+    }
+    return { user: auth.user, adminClient };
+  } catch {
+    return { error: json(503, { error: "Could not verify administrator access.", code: "ADMIN_AUTH_UNAVAILABLE" }) };
+  }
+}
+
+async function handleAdminDashboard(request, env) {
+  if (request.method !== "GET") return json(405, { error: "Method not allowed" });
+  if (!env.USAGE_DB || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return json(503, { error: "Admin dashboard services are not configured.", code: "ADMIN_NOT_CONFIGURED" });
+  }
+  const admin = await authorizeAdmin(request, env);
+  if (admin.error) return admin.error;
+
+  const now = new Date();
+  const day = utcUsageDay(now);
+  try {
+    const summary = await env.USAGE_DB.prepare(`
+      SELECT COUNT(*) AS active_users,
+             COALESCE(SUM(chat_count), 0) AS total_chats,
+             COALESCE(SUM(upload_count), 0) AS total_uploads,
+             COALESCE(SUM(upload_bytes), 0) AS total_upload_bytes
+      FROM daily_usage
+      WHERE usage_date = ?1
+    `).bind(day).first();
+    const result = await env.USAGE_DB.prepare(`
+      SELECT usage.user_id, usage.chat_count, usage.upload_count, usage.upload_bytes,
+             COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit
+      FROM daily_usage AS usage
+      LEFT JOIN daily_chat_allocations AS allocation ON allocation.user_id = usage.user_id
+      WHERE usage.usage_date = ?1
+      ORDER BY usage.chat_count DESC, usage.upload_bytes DESC
+      LIMIT ?3
+    `).bind(day, DAILY_CHAT_LIMIT, MAX_DAILY_USERS).all();
+    const userRows = Array.isArray(result?.results) ? result.results : [];
+    const users = await Promise.all(userRows.map(async row => {
+      let email = null;
+      try {
+        const { data } = await admin.adminClient.auth.admin.getUserById(String(row.user_id));
+        email = data?.user?.email || null;
+      } catch {
+        // A deleted or temporarily unavailable Auth user should not hide aggregate usage.
+      }
+      const chatCount = Number(row.chat_count || 0);
+      const dailyChatLimit = Math.min(GLOBAL_DAILY_CHAT_LIMIT, Math.max(0, Number(row.daily_chat_limit ?? DAILY_CHAT_LIMIT)));
+      return {
+        userId: String(row.user_id),
+        email,
+        chatCount,
+        dailyChatLimit,
+        chatsRemaining: Math.max(0, dailyChatLimit - chatCount),
+        uploadCount: Number(row.upload_count || 0),
+        uploadBytes: Number(row.upload_bytes || 0)
+      };
+    }));
+    const totalChats = Number(summary?.total_chats || 0);
+    return json(200, {
+      utcDay: day,
+      resetsAt: nextUtcResetAt(now),
+      activeUsers: Number(summary?.active_users || 0),
+      activeUserLimit: MAX_DAILY_USERS,
+      users,
+      totalChats,
+      sharedChatLimit: GLOBAL_DAILY_CHAT_LIMIT,
+      sharedChatsRemaining: Math.max(0, GLOBAL_DAILY_CHAT_LIMIT - totalChats),
+      defaultDailyChatLimit: DAILY_CHAT_LIMIT,
+      totalUploads: Number(summary?.total_uploads || 0),
+      totalUploadBytes: Number(summary?.total_upload_bytes || 0),
+      usageNote: "These are TMJ app request limits, not Cloudflare Neurons or account-wide AI balance."
+    });
+  } catch {
+    return json(503, { error: "Could not load today's admin usage. Please try again shortly.", code: "ADMIN_USAGE_UNAVAILABLE" });
+  }
+}
+
+async function handleAdminChatLimit(request, env, userId) {
+  if (request.method !== "PUT") return json(405, { error: "Method not allowed" });
+  if (!UUID_PATTERN.test(userId)) return json(400, { error: "Invalid account ID." });
+  if (!env.USAGE_DB || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+    return json(503, { error: "Admin dashboard services are not configured.", code: "ADMIN_NOT_CONFIGURED" });
+  }
+  const admin = await authorizeAdmin(request, env);
+  if (admin.error) return admin.error;
+
+  let body;
+  try { body = await request.json(); } catch { return json(400, { error: "Invalid JSON." }); }
+  const dailyChatLimit = body?.dailyChatLimit;
+  if (!Number.isInteger(dailyChatLimit) || dailyChatLimit < 0 || dailyChatLimit > GLOBAL_DAILY_CHAT_LIMIT) {
+    return json(400, { error: `Daily message limit must be a whole number from 0 to ${GLOBAL_DAILY_CHAT_LIMIT}.` });
+  }
+
+  try {
+    const { data, error } = await admin.adminClient.auth.admin.getUserById(userId);
+    if (error || !data?.user) return json(404, { error: "Account not found." });
+    await env.USAGE_DB.prepare(`
+      INSERT INTO daily_chat_allocations (user_id, chat_limit, updated_at, updated_by)
+      VALUES (?1, ?2, ?3, ?4)
+      ON CONFLICT(user_id) DO UPDATE SET
+        chat_limit = excluded.chat_limit,
+        updated_at = excluded.updated_at,
+        updated_by = excluded.updated_by
+    `).bind(userId, dailyChatLimit, new Date().toISOString(), admin.user.id).run();
+    return json(200, { userId, dailyChatLimit });
+  } catch {
+    return json(503, { error: "Could not save this account's daily message limit.", code: "ADMIN_ALLOCATION_UNAVAILABLE" });
   }
 }
 

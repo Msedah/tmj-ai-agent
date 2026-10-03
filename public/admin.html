@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#f4f7f4">
+    <meta name="description" content="Private TMJ AI Agent administration dashboard for daily usage and account message limits.">
+    <title>TMJ ADMIN | Usage dashboard</title>
+    <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/admin.css">
+  </head>
+  <body class="admin-body">
+    <div class="admin-shell">
+      <header class="admin-header">
+        <a class="admin-brand" href="/" aria-label="TMJ AI Agent home">
+          <img src="/tmj-mark.svg" alt="">
+          <span>TMJ <strong>ADMIN</strong></span>
+        </a>
+        <span class="admin-secure-label"><span aria-hidden="true"></span> Private dashboard</span>
+      </header>
+
+      <main class="admin-main">
+        <section id="adminLoginPanel" class="admin-login-card" aria-labelledby="adminLoginTitle">
+          <p class="eyebrow">TMJ AI AGENT</p>
+          <h1 id="adminLoginTitle">Admin sign in</h1>
+          <p class="admin-intro">Sign in with your existing TMJ AI Agent email and password.</p>
+          <form id="adminLoginForm" class="admin-login-form">
+            <label for="adminEmail">Email address</label>
+            <input id="adminEmail" name="email" type="email" autocomplete="username" required>
+            <label for="adminPassword">Password</label>
+            <input id="adminPassword" name="password" type="password" autocomplete="current-password" minlength="8" required>
+            <button id="adminLoginButton" class="admin-primary-button" type="submit">Sign in</button>
+          </form>
+          <p id="adminLoginStatus" class="admin-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section id="adminApp" class="admin-app" hidden>
+          <header class="admin-page-heading">
+            <div>
+              <p class="eyebrow">ADMINISTRATION</p>
+              <h1>Usage overview</h1>
+              <p id="adminDateCaption" class="admin-intro">Daily app usage · resets at 02:00 South African time.</p>
+            </div>
+            <button id="adminSignOut" class="admin-secondary-button" type="button">Sign out</button>
+          </header>
+          <p id="adminStatus" class="admin-status" role="status" aria-live="polite"></p>
+
+          <section id="adminAccessNotice" class="admin-access-notice" aria-labelledby="adminAccessTitle" hidden>
+            <h2 id="adminAccessTitle">This account is not enabled for admin access</h2>
+            <p>To protect the dashboard, an administrator must authorize this signed-in account by its Supabase user ID. No password needs to be shared.</p>
+            <div class="admin-account-id">
+              <span>Your signed-in account ID</span>
+              <code id="adminAccountId"></code>
+              <button id="copyAdminAccountId" class="admin-secondary-button" type="button">Copy ID</button>
+            </div>
+          </section>
+
+          <div id="adminDashboardContent" hidden>
+            <section class="admin-metrics" aria-label="Today's TMJ usage">
+              <article class="admin-metric-card">
+                <span>Active accounts</span>
+                <strong id="activeUsersValue">—</strong>
+                <small id="activeUsersCaption">of 10 daily accounts</small>
+              </article>
+              <article class="admin-metric-card">
+                <span>Chat requests used</span>
+                <strong id="totalChatsValue">—</strong>
+                <small id="totalChatsCaption">of 350 shared per day</small>
+              </article>
+              <article class="admin-metric-card admin-metric-highlight">
+                <span>Shared chat requests left</span>
+                <strong id="sharedRemainingValue">—</strong>
+                <small>TMJ app allowance</small>
+              </article>
+              <article class="admin-metric-card">
+                <span>Uploads today</span>
+                <strong id="uploadsValue">—</strong>
+                <small id="uploadsCaption">—</small>
+              </article>
+            </section>
+
+            <aside class="admin-usage-note">
+              <strong>About these numbers</strong>
+              <p>These figures show TMJ's app request limits, not a Cloudflare AI-points balance or total Neuron usage across your Cloudflare account. <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Open Cloudflare dashboard</a>.</p>
+            </aside>
+
+            <section class="admin-users-section" aria-labelledby="activeAccountsTitle">
+              <div class="admin-section-heading">
+                <div>
+                  <p class="eyebrow">ACCOUNT ACTIVITY</p>
+                  <h2 id="activeAccountsTitle">Active accounts today</h2>
+                  <p>Set a daily TMJ chat-request limit for an account. The shared 350-request cap and 10-account pilot cap remain in force.</p>
+                </div>
+                <button id="refreshAdminDashboard" class="admin-secondary-button" type="button">Refresh</button>
+              </div>
+              <div id="adminUsers" class="admin-users-list" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <footer class="admin-footer"><a href="/">Back to TMJ AI Agent</a></footer>
+    </div>
+    <script src="/vendor/supabase-js-2.117.2.js" defer></script>
+    <script src="/admin.js" defer></script>
+  </body>
+</html>
