@@ -831,6 +831,7 @@ chatForm.addEventListener("submit", async (event) => {
       const uploadErrors = [];
       const failedFiles = [];
       let uploadLimitReached = false;
+      let aiNeuronLimitReached = false;
       for (const [index, file] of files.entries()) {
         let stagedUploadPath = null;
         $("sendLabel").textContent = `Uploading ${index + 1}/${files.length}…`;
@@ -851,6 +852,15 @@ chatForm.addEventListener("submit", async (event) => {
           });
           const indexData = await readJson(indexResponse);
           if (!indexResponse.ok) {
+            if (indexData.code === "DAILY_AI_NEURON_LIMIT_REACHED") {
+              applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: indexData.resetAt });
+              setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+              setStatus(uploadStatus, DAILY_LIMIT_MESSAGE, "limit");
+              aiNeuronLimitReached = true;
+              failedFiles.push(...files.slice(index));
+              uploadLimitReached = true;
+              break;
+            }
             if (indexData.code === "DAILY_LIMIT_REACHED") {
               applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: indexData.resetAt });
               setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
@@ -886,7 +896,9 @@ chatForm.addEventListener("submit", async (event) => {
       if (indexedCount) {
         await Promise.all([refreshDailyUsage(), loadConversations()]);
       }
-      if (uploadLimitReached && !dailyUsage?.uploadAllowed) {
+      if (aiNeuronLimitReached) {
+        setStatus(uploadStatus, DAILY_LIMIT_MESSAGE, "limit");
+      } else if (uploadLimitReached && !dailyUsage?.uploadAllowed) {
         setStatus(uploadStatus, `${indexedCount} of ${files.length} selected ${files.length === 1 ? "document was" : "documents were"} indexed. ${UPLOAD_LIMIT_MESSAGE}`, "limit");
       } else if (uploadErrors.length) {
         const prefix = indexedCount ? `${indexedCount} of ${files.length} selected documents were indexed. ` : "";
@@ -914,7 +926,11 @@ chatForm.addEventListener("submit", async (event) => {
       const data = await readJson(response);
       if (!response.ok) {
         answer.textContent = data.error || `The request failed (${response.status}).`;
-        if (data.code === "DAILY_LIMIT_REACHED") {
+        if (data.code === "DAILY_AI_NEURON_LIMIT_REACHED") {
+          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: data.resetAt });
+          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+          setStatus(uploadStatus, DAILY_LIMIT_MESSAGE, "limit");
+        } else if (data.code === "DAILY_LIMIT_REACHED") {
           applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: data.resetAt });
           setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
         } else if (data.code === "DAILY_USAGE_UNAVAILABLE") {
