@@ -1,7 +1,7 @@
 # TMJ AI Agent Architecture
 
 ## Identity
-TMJ AI Agent is a general-purpose assistant with a focus on North-West University (NWU) students. Developer contact details are intentionally not displayed in the interface. If a user explicitly asks who developed the app, the assistant gives only the approved short identity.
+TMJ AI Agent is a general-purpose assistant with a focus on North-West University (NWU) students. Developer contact details are intentionally not displayed in the interface. If a user explicitly asks about the developer, creator, or why the app was built, the assistant shows the approved developer profile with a concise, professional summary of its student-support purpose.
 
 ## NWU source hierarchy
 1. Current public official NWU pages and documents discovered through NWU's live multisite search.

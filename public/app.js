@@ -227,6 +227,7 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
 
 function normalizeDeveloperProfile(value) {
   if (!value || typeof value !== "object") return null;
+  const purpose = String(value.purpose || "I created TMJ AI Agent to make practical, accessible AI support available for everyday questions and, especially, for NWU students—helping learners understand concepts, work with their own study materials, and get clear guidance in one place.").trim();
   const name = String(value.name || "").trim();
   const fullName = String(value.fullName || "").trim();
   const initialsMeaning = String(value.initialsMeaning || "").trim();
@@ -242,6 +243,7 @@ function normalizeDeveloperProfile(value) {
     name,
     fullName,
     initialsMeaning,
+    purpose,
     role,
     location,
     email,
@@ -264,6 +266,7 @@ function parseDeveloperProfileReply(text) {
     name: fields.get("name"),
     fullName: fields.get("full name"),
     initialsMeaning: fields.get("tj stands for"),
+    purpose: fields.get("purpose for creating tmj ai agent"),
     role: fields.get("role"),
     location: fields.get("location"),
     email: fields.get("email"),
@@ -300,6 +303,8 @@ function appendDeveloperProfileCard(answer, candidate) {
   appendProfileText(body, "p", "developer-profile-kicker", "Developer identity");
   appendProfileText(body, "h3", "developer-profile-name", profile.name);
   appendProfileText(body, "p", "developer-profile-role", profile.role);
+  appendProfileText(body, "p", "developer-profile-purpose-title", "Why I created TMJ AI Agent");
+  appendProfileText(body, "p", "developer-profile-purpose", profile.purpose);
   appendProfileText(body, "p", "developer-profile-full-name", `Full name: ${profile.fullName}`);
   appendProfileText(body, "p", "developer-profile-initials", profile.initialsMeaning);
   appendProfileText(body, "p", "developer-profile-location", `Location: ${profile.location}`);
