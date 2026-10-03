@@ -221,6 +221,12 @@ test("conversation deletion authenticates the owner and scopes service-role dele
     if (url.pathname.endsWith("/auth/v1/user")) {
       return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
+    if (url.pathname.endsWith("/rest/v1/documents") && request.method === "GET") {
+      return new Response(JSON.stringify([{ storage_path: "student-1/study/notes.pdf" }]), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/storage/v1/object/tmj-documents") && request.method === "DELETE") {
+      return new Response(JSON.stringify({}), { headers: { "Content-Type": "application/json" } });
+    }
     if (url.pathname.endsWith("/rest/v1/conversations") && request.method === "DELETE") {
       return new Response(JSON.stringify([{ id }]), { headers: { "Content-Type": "application/json" } });
     }
@@ -242,11 +248,17 @@ test("conversation deletion authenticates the owner and scopes service-role dele
     assert.deepEqual(await response.json(), { ok: true, id });
     const userCheck = calls.find(call => call.url.pathname.endsWith("/auth/v1/user"));
     assert.equal(userCheck.request.headers.get("Authorization"), "Bearer student-token");
-    const deletion = calls.find(call => call.request.method === "DELETE");
+    const deletion = calls.find(call => call.request.method === "DELETE" && call.url.pathname.endsWith("/rest/v1/conversations"));
     assert.ok(deletion, "a database delete was issued");
     assert.equal(deletion.url.searchParams.get("id"), `eq.${id}`);
     assert.equal(deletion.url.searchParams.get("user_id"), "eq.student-1", "the signed-in user ID is applied as an owner filter");
     assert.equal(deletion.request.headers.get("Authorization"), "Bearer private-service-key");
+    const documentLookup = calls.find(call => call.url.pathname.endsWith("/rest/v1/documents"));
+    assert.equal(documentLookup.url.searchParams.get("conversation_id"), `eq.${id}`);
+    assert.equal(documentLookup.url.searchParams.get("user_id"), "eq.student-1");
+    const storageRemoval = calls.find(call => call.url.pathname.endsWith("/storage/v1/object/tmj-documents"));
+    assert.ok(storageRemoval, "original private upload file is removed with its conversation");
+    assert.deepEqual(JSON.parse(await storageRemoval.request.text()), { prefixes: ["student-1/study/notes.pdf"] });
 
     const noServiceRole = await worker.fetch(new Request(`https://example.test/api/conversations/${id}`, {
       method: "DELETE",
@@ -254,7 +266,7 @@ test("conversation deletion authenticates the owner and scopes service-role dele
     }), { ...env, SUPABASE_SERVICE_ROLE_KEY: "" });
     assert.equal(noServiceRole.status, 503);
     assert.deepEqual(await noServiceRole.json(), { error: "Conversation deletion is not configured." });
-    assert.equal(calls.filter(call => call.request.method === "DELETE").length, 1, "missing admin credentials never reach the database delete");
+    assert.equal(calls.filter(call => call.request.method === "DELETE" && call.url.pathname.endsWith("/rest/v1/conversations")).length, 1, "missing admin credentials never reach the conversation delete");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -436,18 +448,31 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
   let chatCount = 35;
   let documentCount = 0;
   let chunkBatchCount = 0;
+  let conversationInsertCount = 0;
+  let conversationId = null;
+  const indexedRows = [];
+  const createdConversationId = '123e4567-e89b-12d3-a456-426614174001';
   let aiCalls = 0;
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@nwu.ac.za', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
+    if (url.pathname.endsWith('/rest/v1/conversations') && request.method === 'POST') {
+      conversationInsertCount += 1;
+      return new Response(JSON.stringify({ id: createdConversationId }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname.endsWith('/rest/v1/conversations') && request.method === 'GET') {
+      return new Response(JSON.stringify({ id: createdConversationId }), { headers: { 'Content-Type': 'application/json' } });
+    }
     if (url.pathname.includes('/storage/v1/object/')) {
       const file = fixtures.find(item => decodeURIComponent(url.pathname).endsWith(item.name));
       return file ? new Response(file.bytes, { headers: { 'Content-Type': 'application/octet-stream' } }) : new Response('Not found', { status: 404 });
     }
     if (url.pathname.endsWith('/rest/v1/documents')) {
       documentCount += 1;
-      return new Response(JSON.stringify({ id: `document-${documentCount}` }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      const row = JSON.parse(await request.text());
+      indexedRows.push(row);
+      return new Response(JSON.stringify({ id: `document-${documentCount}`, file_name: row.file_name, module_code: row.module_code, created_at: '2026-10-02T00:00:00Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } });
     }
     if (url.pathname.endsWith('/rest/v1/document_chunks')) {
       chunkBatchCount += 1;
@@ -460,7 +485,7 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
       const response = await worker.fetch(new Request('https://example.test/api/index-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer user-token' },
-        body: JSON.stringify({ storagePath: `student-1/${file.name}`, fileName: file.name, fileSize: file.bytes.byteLength })
+        body: JSON.stringify({ storagePath: `student-1/${file.name}`, fileName: file.name, fileSize: file.bytes.byteLength, conversationId })
       }), {
         AI: { async run() { aiCalls += 1; return { data: [Array(384).fill(0.01)] }; } },
         SUPABASE_URL: 'https://test-project.supabase.co',
@@ -486,12 +511,17 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
         }
       });
       assert.equal(response.status, 200, `${file.name} must index successfully`);
-      assert.equal((await response.json()).ok, true);
+      const result = await response.json();
+      assert.equal(result.ok, true);
+      assert.equal(result.conversationId, createdConversationId);
+      conversationId = result.conversationId;
     }
     assert.equal(uploadCount, 2, 'multiple files are counted by bytes, not by a one-file-per-day rule');
     assert.equal(uploadBytes, fixtures.reduce((sum, file) => sum + file.bytes.byteLength, 0));
     assert.equal(chatCount, 35, 'uploading documents does not consume chat points');
     assert.equal(documentCount, 2);
+    assert.equal(conversationInsertCount, 1, 'a new conversation is created only once for the upload batch');
+    assert.deepEqual(indexedRows.map(row => row.conversation_id), [createdConversationId, createdConversationId]);
     assert.equal(chunkBatchCount, 2);
     assert.equal(aiCalls, 2);
   } finally {
@@ -783,6 +813,86 @@ test("assistant reply sanitizer removes unavailable-source notes and trailing so
   assert.equal(answer, "Here is a clear academic explanation.");
   assert.doesNotMatch(answer, /no sources available|source notes|no uploaded material/i);
   assert.equal(sanitizeAssistantReply("No sources available."), "I can help explain the academic topic. Please add a little more detail to your question.");
+});
+
+test("conversation document migration removes the unscoped vector RPC and filters student uploads by chat", () => {
+  const migration = readFileSync(new URL("../migrations/0003_conversation_scoped_documents.sql", import.meta.url), "utf8");
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS conversation_id uuid REFERENCES public\.conversations\(id\) ON DELETE CASCADE/i);
+  assert.match(migration, /DROP FUNCTION IF EXISTS public\.match_document_chunks_cloudflare\(vector, integer\)/i);
+  assert.match(migration, /target_conversation_id uuid DEFAULT NULL/i);
+  assert.match(migration, /d\.source_type = 'student_upload'\s+AND d\.conversation_id = target_conversation_id/is);
+  assert.doesNotMatch(migration, /c\.user_id = auth\.uid\(\)\s+OR d\.source_type/i, "the old across-all-conversations retrieval predicate is removed");
+});
+
+test("chat retrieval is limited to the active conversation and retains recent turns", async () => {
+  const originalFetch = globalThis.fetch;
+  const conversationId = "123e4567-e89b-12d3-a456-426614174000";
+  const previousTurns = [
+    { role: "user", content: "I uploaded my biology study guide." },
+    { role: "assistant", content: "I can answer questions from the study guide in this chat." }
+  ];
+  let rpcArguments;
+  let modelMessages;
+  let aiCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/conversations") && request.method === "GET") {
+      const owned = url.searchParams.get("id") === `eq.${conversationId}`;
+      return new Response(JSON.stringify(owned ? { id: conversationId } : []), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/multisite-search")) return new Response("<html><body>No public result</body></html>");
+    if (url.pathname.endsWith("/rpc/match_document_chunks_cloudflare")) {
+      rpcArguments = JSON.parse(await request.text());
+      return new Response("[]", { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/messages") && request.method === "GET") {
+      return new Response(JSON.stringify([...previousTurns].reverse()), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/messages") && request.method === "POST") return new Response(null, { status: 201 });
+    throw new Error(`Unexpected request: ${request.method} ${url.href}`);
+  };
+
+  try {
+    const env = {
+      AI: {
+        async run(model, input) {
+          aiCalls += 1;
+          if (model === "@cf/baai/bge-small-en-v1.5") return { data: [Array(384).fill(0.01)] };
+          modelMessages = input.messages;
+          return { response: "The biology guide in this chat describes cell structure." };
+        }
+      },
+      SUPABASE_URL: "https://test-project.supabase.co",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      USAGE_DB: mockUsageDatabase({ chat_count: 1, upload_count: 0 })
+    };
+    const response = await worker.fetch(new Request("https://example.test/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ message: "Explain that in more detail.", conversationId })
+    }), env);
+    assert.equal(response.status, 200);
+    assert.equal(rpcArguments.target_conversation_id, conversationId);
+    assert.equal(rpcArguments.match_count, 12);
+    assert.equal(modelMessages[1].content, previousTurns[0].content);
+    assert.equal(modelMessages[2].content, previousTurns[1].content);
+    assert.match(modelMessages.at(-1).content, /Explain that in more detail/);
+
+    const beforeForeignConversation = aiCalls;
+    const foreignResponse = await worker.fetch(new Request("https://example.test/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      body: JSON.stringify({ message: "Use another student's study guide.", conversationId: "123e4567-e89b-12d3-a456-426614174099" })
+    }), env);
+    assert.equal(foreignResponse.status, 404);
+    assert.equal(aiCalls, beforeForeignConversation, "a conversation the user does not own never reaches retrieval or AI");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("protected NWU indexing rejects eFundi/private and external URLs before fetching", async () => {

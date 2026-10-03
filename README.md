@@ -27,7 +27,7 @@ The active Worker uses `@cf/meta/llama-3.2-3b-instruct` for chat and `@cf/baai/b
 
 ## Required services and setup
 
-1. In the Supabase SQL Editor, run `supabase/schema.sql`. It creates the conversation, message, document, and chunk tables, the Cloudflare vector-search function, the private Storage bucket, and row-level security policies. The script is safe to rerun and preserves any pre-existing OpenAI embedding column/data.
+1. In the Supabase SQL Editor, run `supabase/schema.sql`. It creates the conversation, message, document, and chunk tables, the Cloudflare vector-search function, the private Storage bucket, and row-level security policies. The script is safe to rerun and preserves any pre-existing OpenAI embedding column/data. Existing installations must also run the next numbered SQL file under `migrations/` when a new migration is released.
 2. In Supabase **Authentication → Sign In / Providers**, keep **Allow new users to sign up** enabled and turn **Confirm email** off. Email and password remain required; no display-name field is collected. Turning off confirmation allows account creation/sign-in without proving control of the email address, so users should still use an address they own.
 3. Set the Worker values in **Cloudflare Dashboard → Workers & Pages → `tmj-ai-agent` → Settings → Variables and Secrets**. The Workers AI binding named `AI` is declared in `wrangler.jsonc`; it does not need an AI provider API key.
 
@@ -65,6 +65,8 @@ npm test
 - `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document-indexing configuration. NWU ingestion is reported separately. Health does not consume an AI request or guarantee remaining daily quota.
 - `POST /api/chat` — authenticated academic question, vector retrieval, and conversation persistence.
 - `DELETE /api/conversations/{id}` — authenticated deletion of the signed-in user's conversation; related messages are removed by the database cascade.
+
+Student uploads are associated with the conversation in which they were indexed. Reopening a recent conversation restores its document cards, and semantic retrieval can use that conversation's uploads only. Uploading while no chat is open creates a conversation; adding another file in the same session attaches it to that chat. Deleting a conversation removes its associated document records and private storage files.
 - `POST /api/index-document` — authenticated indexing of an uploaded user document.
 - `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
 

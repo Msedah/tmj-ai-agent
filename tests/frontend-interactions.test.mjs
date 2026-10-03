@@ -28,7 +28,8 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(markup, /class="starter-prompt"/);
   assert.doesNotMatch(markup, /upload-hint|2\s*MiB|40\s*MiB|one document per day|Supported formats:/i);
   assert.match(markup, /independent study aid, not an official NWU service/i);
-  assert.match(markup, /Deleting a conversation does not delete uploaded files or indexed text/i);
+  assert.match(markup, /Deleting that conversation also deletes its uploads and indexed text/i);
+  assert.match(markup, /stay with the conversation where they were added/i);
   assert.match(markup, /Cloudflare Workers AI/);
   assert.match(markup, /daily usage counter linked to your account/i);
   assert.match(markup, /not question text or an AI-points balance/i);
@@ -115,6 +116,8 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     { id: "conversation-2", title: "Research methods" }
   ];
   let savedMessages = [];
+  let savedDocuments = [];
+  let indexedDocuments = 0;
   let usageSnapshot = { chatAllowed: true, uploadAllowed: true };
   let rejectNextIndex = false;
   let failUsageCheck = false;
@@ -158,6 +161,15 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
               async order() { return { data: savedMessages.map(message => ({ ...message })), error: null }; }
             };
           }
+          if (table === "documents") {
+            let selectedConversationId = null;
+            const query = {
+              select() { return this; },
+              eq(column, value) { if (column === "conversation_id") selectedConversationId = value; return this; },
+              async order() { return { data: savedDocuments.filter(document => document.conversation_id === selectedConversationId).map(document => ({ ...document })), error: null }; }
+            };
+            return query;
+          }
           const query = {
             select() { return this; },
             order() { return this; },
@@ -196,7 +208,16 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
         rejectNextIndex = false;
         return { ok: false, status: 422, json: async () => ({ error: "The document could not be extracted." }) };
       }
-      return { ok: true, status: 200, json: async () => ({ message: "Document indexed successfully." }) };
+      const requestBody = JSON.parse(options.body || "{}");
+      const conversationId = requestBody.conversationId || "conversation-uploads";
+      const document = {
+        file_name: requestBody.fileName,
+        module_code: requestBody.moduleCode,
+        conversation_id: conversationId,
+        created_at: `2026-10-02T00:00:0${indexedDocuments++}.000Z`
+      };
+      savedDocuments.push(document);
+      return { ok: true, status: 200, json: async () => ({ message: "Document added to this conversation.", conversationId, document: { fileName: document.file_name, moduleCode: document.module_code, createdAt: document.created_at } }) };
     }
     if (url === "/api/chat") {
       const question = JSON.parse(options.body || "{}").message || "";
@@ -387,11 +408,15 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const indexCall = fetchCalls.find(call => call.url === "/api/index-document");
   assert.ok(indexCall, "indexing runs from the same composer submit");
   assert.equal(JSON.parse(indexCall.options.body).moduleCode, "PADM101");
+  assert.equal(JSON.parse(indexCall.options.body).conversationId, null, "first upload creates a new conversation on the server");
   assert.equal(elements.attachmentPreview.hidden, true, "successful indexing clears the attachment chip");
   assert.equal(elements.uploadStatus.textContent, "", "successful indexing does not leave status clutter by the composer");
   assert.match(elements.messages.children.at(-1).textContent, /Upload complete.*ask a question/i, "upload-only indexing receives a visible chat acknowledgment");
   assert.equal(elements.attachDocument.disabled, false, "successful indexing does not exhaust the daily upload budget");
   assert.equal(elements.sendButton.disabled, false, "document uploads do not block chat");
+  const uploadCallsForFirstBatch = fetchCalls.filter(call => call.url === "/api/index-document").map(call => JSON.parse(call.options.body));
+  assert.equal(uploadCallsForFirstBatch[0].conversationId, null);
+  assert.equal(uploadCallsForFirstBatch[1].conversationId, null, "the first successful retry creates its conversation on the server");
 
   elements.documentFile.files = [
     { name: "PADM101-slides.pptx", size: 4096, type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" },
@@ -402,6 +427,10 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.doesNotMatch(elements.attachmentName.textContent, /KiB|MiB/);
   await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
   assert.equal(uploadCalls.length, 4, "multiple selected files are uploaded and indexed one at a time");
+  const uploadBodiesAfterBatch = fetchCalls.filter(call => call.url === "/api/index-document").map(call => JSON.parse(call.options.body));
+  assert.equal(uploadBodiesAfterBatch[2].conversationId, "conversation-uploads");
+  assert.equal(uploadBodiesAfterBatch[3].conversationId, "conversation-uploads", "all files in one batch remain attached to the same conversation");
+  assert.equal(elements.messages.children.filter(child => child.className === "message document-message").length, 3, "each uploaded file appears in the current conversation transcript");
   assert.match(elements.messages.children.at(-1).textContent, /Upload complete.*ask a question/i, "multi-file upload receives the same clear completion feedback");
 
   const callsBeforeChatLockedUpload = fetchCalls.filter(call => call.url === "/api/index-document").length;
@@ -427,6 +456,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   const chatCall = fetchCalls.find(call => call.url === "/api/chat");
   assert.ok(chatCall, "academic question reaches the Worker");
   assert.match(chatCall.options.headers.Authorization, /^Bearer test-token$/);
+  assert.equal(JSON.parse(chatCall.options.body).conversationId, "conversation-uploads", "questions after upload target the conversation that owns the files");
   const assistant = elements.messages.children.at(-1);
   assert.match(assistant.textContent, /Academic integrity is supported/);
   assert.equal(assistant.children.length, 2, "citations and accessible answer actions are separate from the AI answer text");
@@ -504,11 +534,16 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.sendButton.disabled, false, "a successful status retry restores access after an outage");
 
   savedMessages = [
-    { role: "user", content: "Who is the developer?" },
-    { role: "assistant", content: "Developer profile\nName: TJ Mailula\nFull name: Tshepo Joseph Mailula\nTJ stands for: Tshepo Joseph\nRole: Developer and creator of TMJ AI Agent\nLocation: Tzaneen, Limpopo, South Africa\nEmail: mailulajosep@gmail.com\nPhone: 0718452020" }
+    { role: "user", content: "Who is the developer?", created_at: "2026-10-02T00:00:01.000Z" },
+    { role: "assistant", content: "Developer profile\nName: TJ Mailula\nFull name: Tshepo Joseph Mailula\nTJ stands for: Tshepo Joseph\nRole: Developer and creator of TMJ AI Agent\nLocation: Tzaneen, Limpopo, South Africa\nEmail: mailulajosep@gmail.com\nPhone: 0718452020", created_at: "2026-10-02T00:00:02.000Z" }
   ];
+  savedDocuments = [{ file_name: "Biology-guide.pdf", module_code: "BIOL101", conversation_id: "conversation-1", created_at: "2026-10-02T00:00:00.500Z" }];
   await elements.conversationList.children[0].children[0].listeners.get("click")[0]();
   assert.equal(elements.messages.children.at(-1).className, "message assistant developer-answer", "saved profile answers reconstruct the card on history reload");
+  assert.ok(elements.messages.children.some(child => child.className === "message document-message"), "opening a recent conversation restores its uploaded document card");
+  const restoredDocument = elements.messages.children.find(child => child.className === "message document-message");
+  assert.match(restoredDocument.children.map(child => child.textContent).join(" "), /Biology-guide\.pdf/);
+  assert.match(restoredDocument.children.map(child => child.textContent).join(" "), /BIOL101/);
 
   assert.equal(elements.conversationList.children.length, 2, "signed-in history renders each recent conversation after refresh");
   const firstConversationRow = elements.conversationList.children[0];
@@ -525,7 +560,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.conversationList.children.length, 2);
   confirmResponse = true;
   await deleteButton.listeners.get("click")[0](clickEvent);
-  assert.match(confirmationMessages[0], /delete this conversation and all its messages/i);
+  assert.match(confirmationMessages[0], /delete this conversation, its messages, and its uploaded documents/i);
   assert.equal(deleteRequests.length, 1);
   assert.equal(deleteRequests[0].url, "/api/conversations/conversation-1");
   assert.equal(deleteRequests[0].options.method, "DELETE");
