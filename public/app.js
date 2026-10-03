@@ -71,7 +71,6 @@ function showAuthDialog(message = "") {
 const sidebarToggle = $("sidebarToggle");
 const sidebarOverlay = $("sidebarOverlay");
 const sidebarCollapse = $("sidebarCollapse");
-const aboutToggle = $("aboutToggle");
 
 function isMobileSidebar() {
   return Boolean(window.matchMedia?.("(max-width: 800px)").matches);
@@ -101,14 +100,6 @@ sidebarCollapse?.addEventListener("click", () => {
   sidebarCollapse.title = label;
   sidebarCollapse.setAttribute("aria-label", label);
   sidebarCollapse.setAttribute("aria-expanded", String(!collapsed));
-});
-aboutToggle?.addEventListener("click", () => {
-  const about = $("about");
-  const show = Boolean(about?.hidden);
-  if (about) about.hidden = !show;
-  aboutToggle.setAttribute("aria-expanded", String(show));
-  if (show) about?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
-  if (isMobileSidebar()) setSidebarOpen(false);
 });
 $("historyToggle")?.addEventListener("click", () => {
   historyVisible = !historyVisible;
