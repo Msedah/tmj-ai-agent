@@ -747,8 +747,8 @@ test("developer questions return the exact structured profile only when explicit
     name: "TJ Mailula",
     fullName: "Tshepo Joseph Mailula",
     initialsMeaning: "TJ stands for Tshepo Joseph",
-    role: "Developer and creator of TMJ AI Agent",
-    purpose: "I created TMJ AI Agent to make practical, accessible AI support available for everyday questions and, especially, for NWU students—helping learners understand concepts, work with their own study materials, and get clear guidance in one place.",
+    role: "Developer, progressive programmer, and creator of TMJ AI Agent",
+    purpose: "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI support accessible for everyday questions and to support NWU students in understanding concepts and working with their own study materials. I hope to use AI and automation to make useful information and guidance easier to access.",
     location: "Tzaneen, Limpopo, South Africa",
     email: "mailulajosep@gmail.com",
     phone: "0718452020",
@@ -758,7 +758,7 @@ test("developer questions return the exact structured profile only when explicit
   });
   assert.match(identity.reply, /Full name: Tshepo Joseph Mailula/);
   assert.match(identity.reply, /TJ stands for: Tshepo Joseph/);
-  assert.match(identity.reply, /Purpose for creating TMJ AI Agent: I created TMJ AI Agent to make practical, accessible AI support available/);
+  assert.match(identity.reply, /Purpose for creating TMJ AI Agent: I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation\./);
   assert.match(identity.reply, /Location: Tzaneen, Limpopo, South Africa/);
   assert.match(identity.reply, /Email: mailulajosep@gmail\.com/);
   assert.match(identity.reply, /Phone: 0718452020/);
@@ -766,7 +766,7 @@ test("developer questions return the exact structured profile only when explicit
   assert.ok(getDeveloperIdentityResponse("What is the developer's email?"));
   assert.ok(getDeveloperIdentityResponse("How can I contact the creator?"));
   assert.ok(getDeveloperIdentityResponse("Who is T.J. Mailula?"));
-  assert.match(getDeveloperIdentityResponse("Why did you develop TMJ AI Agent?").reply, /especially, for NWU students/);
+  assert.match(getDeveloperIdentityResponse("Why did you develop TMJ AI Agent?").reply, /support NWU students/);
   assert.match(getDeveloperIdentityResponse("What was the purpose of creating this app?").profile.purpose, /everyday questions/);
   assert.equal(getDeveloperIdentityResponse("Why did you develop a study plan?"), null);
   assert.equal(getDeveloperIdentityResponse("What is the purpose of artificial intelligence?"), null);
@@ -806,13 +806,15 @@ test("developer chat returns the profile and does not call AI, embeddings, or NW
     const response = await worker.fetch(new Request("https://example.test/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
-      body: JSON.stringify({ message: "What is the developer's email?" })
+    body: JSON.stringify({ message: "Who is the developer?" })
     }), env);
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.developerProfile.email, "mailulajosep@gmail.com");
     assert.equal(payload.developerProfile.phone, "0718452020");
     assert.equal(payload.developerProfile.photoUrl, "/developer-tj.webp");
+    assert.match(payload.developerProfile.role, /progressive programmer/);
+    assert.match(payload.developerProfile.purpose, /practical automation/);
     assert.deepEqual(payload.sources, []);
     assert.equal(payload.nwuSearchUrl, null);
     assert.equal(aiCalls, 0);

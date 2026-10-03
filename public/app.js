@@ -227,7 +227,7 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
 
 function normalizeDeveloperProfile(value) {
   if (!value || typeof value !== "object") return null;
-  const purpose = String(value.purpose || "I created TMJ AI Agent to make practical, accessible AI support available for everyday questions and, especially, for NWU students—helping learners understand concepts, work with their own study materials, and get clear guidance in one place.").trim();
+  const purpose = String(value.purpose || "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI support accessible for everyday questions and to support NWU students in understanding concepts and working with their own study materials. I hope to use AI and automation to make useful information and guidance easier to access.").trim();
   const name = String(value.name || "").trim();
   const fullName = String(value.fullName || "").trim();
   const initialsMeaning = String(value.initialsMeaning || "").trim();
