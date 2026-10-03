@@ -96,7 +96,7 @@ drop function if exists public.match_document_chunks_cloudflare(vector, integer,
 drop function if exists public.match_document_chunks_cloudflare(vector, integer);
 create or replace function public.match_document_chunks_cloudflare(
   query_embedding vector(384),
-  match_count integer default 8,
+  match_count integer default 12,
   target_conversation_id uuid default null
 )
 returns table (
@@ -110,22 +110,38 @@ returns table (
   source_url text
 )
 language sql stable as $$
-  select c.id, c.document_id, c.content,
-         1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
-         d.file_name, d.module_code, d.source_type, d.source_url
-  from public.document_chunks c
-  join public.documents d on d.id = c.document_id
-  where (
-      d.source_type = 'nwu_official'
-      or (
-        c.user_id = auth.uid()
-        and d.user_id = auth.uid()
-        and d.source_type = 'student_upload'
-        and d.conversation_id = target_conversation_id
-      )
-    )
-    and c.embedding_cloudflare is not null
-  order by c.embedding_cloudflare <=> query_embedding
+  with upload_matches as (
+    select c.id, c.document_id, c.content,
+           1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
+           d.file_name as source_name, d.module_code, d.source_type, d.source_url
+    from public.document_chunks c
+    join public.documents d on d.id = c.document_id
+    where c.user_id = auth.uid()
+      and d.user_id = auth.uid()
+      and d.source_type = 'student_upload'
+      and d.conversation_id = target_conversation_id
+      and c.embedding_cloudflare is not null
+    order by c.embedding_cloudflare <=> query_embedding
+    limit least(match_count, 8)
+  ),
+  official_matches as (
+    select c.id, c.document_id, c.content,
+           1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
+           d.file_name as source_name, d.module_code, d.source_type, d.source_url
+    from public.document_chunks c
+    join public.documents d on d.id = c.document_id
+    where d.source_type = 'nwu_official'
+      and c.embedding_cloudflare is not null
+    order by c.embedding_cloudflare <=> query_embedding
+    limit greatest(match_count - least(match_count, 8), 0)
+  ),
+  combined as (
+    select * from upload_matches
+    union all
+    select * from official_matches
+  )
+  select * from combined
+  order by case when source_type = 'student_upload' then 0 else 1 end, similarity desc
   limit match_count;
 $$;
 

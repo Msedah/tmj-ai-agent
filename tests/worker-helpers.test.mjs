@@ -22,6 +22,7 @@ import worker, {
   nextUtcResetAt,
   normalizeExtractedText,
   sanitizeAssistantReply,
+  shouldSearchNwuLiveSources,
   utcUsageDay
 } from "../src/index.js";
 import {
@@ -812,7 +813,14 @@ test("assistant reply sanitizer removes unavailable-source notes and trailing so
   const answer = sanitizeAssistantReply("Here is a clear academic explanation.\n\nSource notes: None (no uploaded material found)");
   assert.equal(answer, "Here is a clear academic explanation.");
   assert.doesNotMatch(answer, /no sources available|source notes|no uploaded material/i);
-  assert.equal(sanitizeAssistantReply("No sources available."), "I can help explain the academic topic. Please add a little more detail to your question.");
+  assert.equal(sanitizeAssistantReply("No sources available."), "I can help with that. Please add a little more detail to your question.");
+});
+
+test("NWU live search is reserved for explicit NWU requests and does not override an active upload chat", () => {
+  assert.equal(shouldSearchNwuLiveSources("What does this document say about assessment?", true), false);
+  assert.equal(shouldSearchNwuLiveSources("How do I plan my weekly budget?", false), false);
+  assert.equal(shouldSearchNwuLiveSources("Find the current NWU registration rule.", true), true);
+  assert.equal(shouldSearchNwuLiveSources("What is the official university exam timetable?", false), true);
 });
 
 test("conversation document migration removes the unscoped vector RPC and filters student uploads by chat", () => {
@@ -824,6 +832,14 @@ test("conversation document migration removes the unscoped vector RPC and filter
   assert.doesNotMatch(migration, /c\.user_id = auth\.uid\(\)\s+OR d\.source_type/i, "the old across-all-conversations retrieval predicate is removed");
 });
 
+test("conversation upload retrieval reserves most result slots for the active chat before adding official NWU results", () => {
+  const migration = readFileSync(new URL("../migrations/0004_prioritize_conversation_uploads.sql", import.meta.url), "utf8");
+  assert.match(migration, /d\.conversation_id = target_conversation_id/i);
+  assert.match(migration, /LIMIT LEAST\(match_count, 8\)/i);
+  assert.match(migration, /LIMIT GREATEST\(match_count - LEAST\(match_count, 8\), 0\)/i);
+  assert.match(migration, /ORDER BY CASE WHEN source_type = 'student_upload' THEN 0 ELSE 1 END/i);
+});
+
 test("chat retrieval is limited to the active conversation and retains recent turns", async () => {
   const originalFetch = globalThis.fetch;
   const conversationId = "123e4567-e89b-12d3-a456-426614174000";
@@ -833,10 +849,13 @@ test("chat retrieval is limited to the active conversation and retains recent tu
   ];
   let rpcArguments;
   let modelMessages;
+  let embeddingText;
   let aiCalls = 0;
+  const searchRequests = [];
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
+    if (url.pathname.endsWith("/multisite-search")) searchRequests.push(url.href);
     if (url.pathname.endsWith("/auth/v1/user")) {
       return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
@@ -844,10 +863,15 @@ test("chat retrieval is limited to the active conversation and retains recent tu
       const owned = url.searchParams.get("id") === `eq.${conversationId}`;
       return new Response(JSON.stringify(owned ? { id: conversationId } : []), { headers: { "Content-Type": "application/json" } });
     }
-    if (url.pathname.endsWith("/multisite-search")) return new Response("<html><body>No public result</body></html>");
     if (url.pathname.endsWith("/rpc/match_document_chunks_cloudflare")) {
       rpcArguments = JSON.parse(await request.text());
-      return new Response("[]", { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify([
+        { id: 1, content: "The study guide describes the stages of cellular respiration.", similarity: 0.11, source_name: "Biology-study-guide.pdf", source_type: "student_upload", source_url: "" },
+        { id: 2, content: "NWU policy describes module registration dates.", similarity: 0.92, source_name: "NWU Registration Policy", source_type: "nwu_official", source_url: "https://www.nwu.ac.za/registration" }
+      ]), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/documents") && request.method === "GET") {
+      return new Response(JSON.stringify([{ file_name: "Biology-study-guide.pdf", module_code: "BIOL123" }]), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/messages") && request.method === "GET") {
       return new Response(JSON.stringify([...previousTurns].reverse()), { headers: { "Content-Type": "application/json" } });
@@ -861,7 +885,10 @@ test("chat retrieval is limited to the active conversation and retains recent tu
       AI: {
         async run(model, input) {
           aiCalls += 1;
-          if (model === "@cf/baai/bge-small-en-v1.5") return { data: [Array(384).fill(0.01)] };
+          if (model === "@cf/baai/bge-small-en-v1.5") {
+            embeddingText = input.text[0];
+            return { data: [Array(384).fill(0.01)] };
+          }
           modelMessages = input.messages;
           return { response: "The biology guide in this chat describes cell structure." };
         }
@@ -878,6 +905,12 @@ test("chat retrieval is limited to the active conversation and retains recent tu
     assert.equal(response.status, 200);
     assert.equal(rpcArguments.target_conversation_id, conversationId);
     assert.equal(rpcArguments.match_count, 12);
+    assert.match(embeddingText, /Explain that in more detail/);
+    assert.match(embeddingText, /Biology-study-guide\.pdf/);
+    assert.match(modelMessages.at(-1).content, /Source 1 \| student-uploaded material \| Biology-study-guide\.pdf/);
+    assert.match(modelMessages.at(-1).content, /stages of cellular respiration/);
+    assert.match(modelMessages[0].content, /capable, friendly general-purpose assistant/i);
+    assert.doesNotMatch(modelMessages[0].content, /politely decline and explain that this assistant is for academic support/i);
     assert.equal(modelMessages[1].content, previousTurns[0].content);
     assert.equal(modelMessages[2].content, previousTurns[1].content);
     assert.match(modelMessages.at(-1).content, /Explain that in more detail/);
@@ -890,6 +923,7 @@ test("chat retrieval is limited to the active conversation and retains recent tu
     }), env);
     assert.equal(foreignResponse.status, 404);
     assert.equal(aiCalls, beforeForeignConversation, "a conversation the user does not own never reaches retrieval or AI");
+    assert.equal(searchRequests.length, 0, "an uploaded-document follow-up does not retrieve unrelated live NWU pages");
   } finally {
     globalThis.fetch = originalFetch;
   }
