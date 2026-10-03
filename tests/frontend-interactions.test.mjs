@@ -20,15 +20,21 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(composer, /id="sendButton"/);
   assert.ok(markup.indexOf('id="chatStatus"') < markup.indexOf('<form id="chatForm"'), "chat feedback appears above the composer");
   assert.ok(markup.indexOf('id="uploadStatus"') < markup.indexOf('<form id="chatForm"'), "upload feedback appears above the composer");
-  assert.doesNotMatch(markup.slice(markup.indexOf("</form>"), markup.indexOf('class="disclaimer"')), /id="chatStatus"|id="uploadStatus"/);
+  assert.doesNotMatch(markup.slice(markup.indexOf("</form>")), /id="chatStatus"|id="uploadStatus"|class="disclaimer"/);
   assert.doesNotMatch(source, /Answer ready\./i);
+  assert.doesNotMatch(source, /setStatus\(chatStatus,\s*["']Conversation deleted\./);
   assert.match(markup, /id="sidebarCollapse"[^>]*aria-label="Hide left panel"/);
-  assert.match(markup, /id="aboutToggle"[^>]*aria-expanded="false"/);
+  const sidebar = markup.match(/<aside[^>]*id="appSidebar"[\s\S]*?<\/aside>/)?.[0] || "";
+  assert.match(sidebar, /id="aboutToggle"[^>]*aria-expanded="false">About<\/button>/);
+  assert.ok(sidebar.indexOf('id="aboutToggle"') > sidebar.indexOf('id="sidebarCollapse"'), "About sits at the bottom of the left panel");
+  assert.match(markup, /<textarea id="prompt" rows="1"/);
+  assert.match(markup, /id="sendLabel">Send message<\/span>/);
+  assert.doesNotMatch(markup, /class="disclaimer"/);
   assert.match(markup, /<section id="about"[^>]*hidden>/);
   assert.match(markup, /src="\/tmj-mark\.svg"/);
   assert.match(markup, /class="starter-prompt"/);
   assert.doesNotMatch(markup, /upload-hint|2\s*MiB|40\s*MiB|one document per day|Supported formats:/i);
-  assert.match(markup, /independent study aid, not an official NWU service/i);
+  assert.match(markup, /independent study companion, not an official North-West University service/i);
   assert.match(markup, /Deleting that conversation also deletes its uploads and indexed text/i);
   assert.match(markup, /stay with the conversation where they were added/i);
   assert.match(markup, /Cloudflare Workers AI/);
@@ -38,9 +44,10 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(markup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
   assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
-  assert.match(markup, /Live NWU search uses topic keywords/);
+  assert.match(markup, /Live NWU public search receives topic keywords/);
   assert.match(styles, /\.delete-conversation:focus-visible/);
   assert.match(styles, /\.send-button:focus-visible/);
+  assert.match(styles, /\.composer textarea[^\n]*resize: none/);
   assert.match(source, /deleteIcon\.className = "delete-icon"/);
 });
 
@@ -58,6 +65,7 @@ class ElementMock {
     this.textContent = "";
     this.innerHTML = "";
     this.scrollHeight = 0;
+    this.style = {};
     this.clickCount = 0;
     this._value = "";
   }
@@ -295,11 +303,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.sidebarToggle.listeners.get("click")[0]();
   elements.aboutToggle.listeners.get("click")[0]();
   assert.equal(elements.about.hidden, false, "About is revealed only after the explicit toggle");
-  assert.equal(elements.aboutToggle.textContent, "Hide About & privacy");
+  assert.equal(elements.aboutToggle.textContent, "Hide About");
   assert.equal(elements.aboutToggle.getAttribute("aria-expanded"), "true");
   assert.equal(bodyClasses.has("sidebar-open"), false, "opening About closes the mobile menu");
   elements.aboutToggle.listeners.get("click")[0]();
   assert.equal(elements.about.hidden, true, "the About toggle hides the information again");
+  assert.equal(elements.aboutToggle.textContent, "About");
 
   mobileViewport = false;
   elements.sidebarCollapse.listeners.get("click")[0]();
@@ -382,7 +391,22 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.ok(elements.accountIdentity.textContent.length <= 25);
   assert.equal(elements.accountIdentity.title, "averyveryverylongemailaddress@example.com");
 
+  elements.prompt.scrollHeight = 32;
   elements.prompt.value = "";
+  elements.prompt.listeners.get("input")[0]();
+  assert.equal(elements.prompt.style.height, "32px", "the empty composer stays compact at one line");
+  assert.equal(elements.prompt.style.overflowY, "hidden");
+  assert.equal(elements.sendLabel.textContent, "Send message");
+  elements.prompt.value = "A longer message wraps onto multiple lines";
+  elements.prompt.scrollHeight = 96;
+  elements.prompt.listeners.get("input")[0]();
+  assert.equal(elements.prompt.style.height, "96px", "the composer grows to fit typed text");
+  elements.prompt.scrollHeight = 260;
+  elements.prompt.listeners.get("input")[0]();
+  assert.equal(elements.prompt.style.height, "180px", "the composer caps its height for very long messages");
+  assert.equal(elements.prompt.style.overflowY, "auto", "very long messages scroll inside the capped composer");
+  elements.prompt.value = "";
+  elements.prompt.scrollHeight = 32;
   elements.prompt.listeners.get("input")[0]();
   elements.attachDocument.listeners.get("click")[0]();
   assert.equal(elements.documentFile.clickCount, 1, "attach button opens the native file picker");
@@ -569,6 +593,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(deleteButton.children[0].className, "delete-icon", "the trash icon returns after the request completes");
   assert.equal(elements.conversationList.children.length, 1, "successful deletion refreshes the history list");
   assert.equal(elements.conversationList.children[0].children[0].textContent, "Research methods");
+  assert.notEqual(elements.chatStatus.textContent, "Conversation deleted.", "successful deletion does not display a toast message");
   assert.match(elements.messages.innerHTML, /What are you studying today\?/, "deleting the open conversation clears it from the chat view");
 
   authStateListener("SIGNED_OUT", null);

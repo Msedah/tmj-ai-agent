@@ -204,7 +204,7 @@ a { color: inherit; }
 .answer-feedback-status { flex-basis: 100%; padding: 2px 5px; color: #66766f; font-size: 0.68rem; line-height: 1.4; }
 .composer { position: sticky; bottom: 0; z-index: 2; width: 100%; display: grid; gap: 7px; margin: 0 auto; padding: 10px 12px; background: #fff; border: 1px solid #d8dde1; border-radius: 18px; box-shadow: 0 5px 22px rgba(34, 44, 50, 0.08); }
 .composer:focus-within { border-color: #aabbb5; box-shadow: 0 0 0 3px rgba(8, 122, 104, 0.08), 0 5px 22px rgba(34, 44, 50, 0.08); }
-.composer textarea { width: 100%; min-width: 0; min-height: 52px; max-height: 180px; padding: 8px 7px; resize: vertical; color: var(--ink); background: transparent; border: 0; outline: none; font: inherit; line-height: 1.45; }
+.composer textarea { width: 100%; min-width: 0; min-height: 32px; max-height: 180px; padding: 5px 7px; overflow-y: hidden; resize: none; color: var(--ink); background: transparent; border: 0; outline: none; font: inherit; line-height: 1.45; }
 .composer textarea::placeholder { color: #90999f; }
 .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .attachment-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
@@ -229,10 +229,10 @@ a { color: inherit; }
 .composer-status-region { width: 100%; }
 .composer-status-region .status { padding: 0 6px; }
 .chat-status { padding: 0 6px; }
-.disclaimer { max-width: 760px; margin: 9px auto 16px; padding: 0 6px; color: #75817d; font-size: 0.72rem; text-align: center; }
-.about-control { width: min(820px, calc(100% - 40px)); margin: 0 auto 10px; padding: 0 6px; text-align: center; }
-.about-toggle { min-height: 36px; padding: 6px 10px; color: #58646d; background: transparent; border: 1px solid transparent; border-radius: 8px; font-size: 0.78rem; font-weight: 650; cursor: pointer; }
-.about-toggle:hover { color: var(--green-dark); background: #f3f7f5; border-color: #e3ece8; }
+.about-control { width: 100%; margin: 0; padding: 0; }
+.about-toggle { width: 100%; min-height: 38px; display: flex; align-items: center; padding: 8px 10px; color: #4d5b60; background: #fff; border: 1px solid #e1e4e7; border-radius: 9px; text-align: left; font-size: 0.82rem; font-weight: 650; cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
+.about-toggle:hover { color: var(--green-dark); background: #f3f7f5; border-color: #cdded5; }
+.about-toggle:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 2px; }
 .about { width: min(820px, calc(100% - 40px)); display: grid; gap: 10px; margin: 0 auto 32px; padding: 18px 22px; color: #5f6c73; background: #f8fbf9; border: 1px solid #e3ece7; border-radius: 14px; }
 .about h2 { margin: 0 0 5px; color: #35434a; font-size: 0.9rem; }
 .about p { margin: 0; font-size: 0.8rem; line-height: 1.5; }
@@ -259,6 +259,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   body.sidebar-collapsed .history-panel,
   body.sidebar-collapsed .sidebar-spacer,
   body.sidebar-collapsed .sidebar-note,
+  body.sidebar-collapsed .about-control,
   body.sidebar-collapsed #accountIdentity,
   body.sidebar-collapsed #authButton,
   body.sidebar-collapsed #historyToggle { display: none !important; }
@@ -291,7 +292,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .app-heading p { max-width: 210px; font-size: 0.67rem; }
   .chat-panel { padding: 0 10px; }
   .composer { gap: 5px; padding: 7px; border-radius: 15px; }
-  .composer textarea { min-height: 44px; padding: 10px 8px; font-size: 0.92rem; }
+  .composer textarea { min-height: 32px; padding: 5px 7px; font-size: 0.92rem; }
   .attach-button { min-height: 34px; padding: 6px 8px; }
   .module-code-control input { width: min(150px, 38vw); }
   .send-button { min-height: 38px; gap: 5px; padding: 8px 9px; font-size: 0.78rem; }
