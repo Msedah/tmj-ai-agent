@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Education-only NWU student AI assistant.",
+  "description": "General-purpose AI assistant with a focus on NWU student support.",
   "scripts": {
     "check": "node --check src/index.js && node --check src/nwu-search.js && node --check public/app.js",
     "test": "node --experimental-wasm-modules --test",

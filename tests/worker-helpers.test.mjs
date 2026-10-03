@@ -10,6 +10,7 @@ import worker, {
   embedMany,
   extractBearerToken,
   extractDocumentText,
+  formatCurrentDateContext,
   generateChatResponse,
   getDailyUsageStatus,
   getDeveloperIdentityReply,
@@ -80,6 +81,14 @@ test("unified parser extracts readable text from every supported office and docu
 
 test("normalizeExtractedText collapses whitespace and trims edges", () => {
   assert.equal(normalizeExtractedText("  one\n\t two   three  "), "one two three");
+});
+
+test("current date context gives the model a trusted UTC clock and South African local date", () => {
+  const context = formatCurrentDateContext(new Date("2026-10-03T23:59:00.000Z"));
+  assert.match(context, /UTC 2026-10-03T23:59:00\.000Z/);
+  assert.match(context, /South Africa \(Africa\/Johannesburg\)/);
+  assert.match(context, /4 October 2026/);
+  assert.match(context, /01:59:00/);
 });
 
 test("daily usage helpers use UTC dates, return no balances, and parameterize atomic caps", async () => {
@@ -819,6 +828,9 @@ test("assistant reply sanitizer removes unavailable-source notes and trailing so
 test("NWU live search is reserved for explicit NWU requests and does not override an active upload chat", () => {
   assert.equal(shouldSearchNwuLiveSources("What does this document say about assessment?", true), false);
   assert.equal(shouldSearchNwuLiveSources("How do I plan my weekly budget?", false), false);
+  assert.equal(shouldSearchNwuLiveSources("What is today's date?", false), false, "the runtime date reference handles this without academic search");
+  assert.equal(shouldSearchNwuLiveSources("When does student registration open?", false), true);
+  assert.equal(shouldSearchNwuLiveSources("What date is my assignment due?", true), false, "an active upload chat stays scoped to its own evidence");
   assert.equal(shouldSearchNwuLiveSources("Find the current NWU registration rule.", true), true);
   assert.equal(shouldSearchNwuLiveSources("What is the official university exam timetable?", false), true);
 });
@@ -909,6 +921,7 @@ test("chat retrieval is limited to the active conversation and retains recent tu
     assert.match(embeddingText, /Biology-study-guide\.pdf/);
     assert.match(modelMessages.at(-1).content, /Source 1 \| student-uploaded material \| Biology-study-guide\.pdf/);
     assert.match(modelMessages.at(-1).content, /stages of cellular respiration/);
+    assert.match(modelMessages.at(-1).content, /CURRENT DATE\/TIME REFERENCE \(trusted runtime clock\)/);
     assert.match(modelMessages[0].content, /capable, friendly general-purpose assistant/i);
     assert.doesNotMatch(modelMessages[0].content, /politely decline and explain that this assistant is for academic support/i);
     assert.equal(modelMessages[1].content, previousTurns[0].content);
