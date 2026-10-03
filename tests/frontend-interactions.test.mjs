@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 const markup = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const styles = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
 
  test("Supabase client uses the standard project API hostname", () => {
   const match = source.match(/supabaseUrl:\s*"([^"]+)"/);
@@ -38,6 +39,9 @@ test("document attachment is inside the message composer and developer contact i
   assert.doesNotMatch(markup, /id="aboutLink"/);
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
   assert.match(markup, /Live NWU search uses topic keywords/);
+  assert.match(styles, /\.delete-conversation:focus-visible/);
+  assert.match(styles, /\.send-button:focus-visible/);
+  assert.match(source, /deleteIcon\.className = "delete-icon"/);
 });
 
 class ElementMock {
@@ -551,20 +555,18 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(firstConversationRow.children.length, 2, "each history row ends with a separate Delete button");
   assert.equal(firstConversationRow.children[1].className, "delete-conversation");
   assert.equal(firstConversationRow.children[1].textContent, "Delete");
+  assert.equal(firstConversationRow.children[1].children[0].className, "delete-icon");
   assert.equal(firstConversationRow.children[1].getAttribute("aria-label"), "Delete conversation: Biology study");
   const deleteButton = elements.conversationList.children[0].children[1];
   const clickEvent = { preventDefault() {}, stopPropagation() {} };
-  confirmResponse = false;
   await deleteButton.listeners.get("click")[0](clickEvent);
-  assert.equal(deleteRequests.length, 0, "canceling the confirmation leaves the conversation intact");
-  assert.equal(elements.conversationList.children.length, 2);
-  confirmResponse = true;
-  await deleteButton.listeners.get("click")[0](clickEvent);
-  assert.match(confirmationMessages[0], /delete this conversation, its messages, and its uploaded documents/i);
+  assert.equal(confirmationMessages.length, 0, "deletion must not show a confirmation dialog");
   assert.equal(deleteRequests.length, 1);
   assert.equal(deleteRequests[0].url, "/api/conversations/conversation-1");
   assert.equal(deleteRequests[0].options.method, "DELETE");
   assert.equal(deleteRequests[0].options.headers.Authorization, "Bearer test-token");
+  assert.equal(deleteButton.textContent, "Delete");
+  assert.equal(deleteButton.children[0].className, "delete-icon", "the trash icon returns after the request completes");
   assert.equal(elements.conversationList.children.length, 1, "successful deletion refreshes the history list");
   assert.equal(elements.conversationList.children[0].children[0].textContent, "Research methods");
   assert.match(elements.messages.innerHTML, /What are you studying today\?/, "deleting the open conversation clears it from the chat view");
