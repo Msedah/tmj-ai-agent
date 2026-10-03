@@ -42,6 +42,12 @@ create table if not exists public.document_chunks (
   created_at timestamptz not null default now()
 );
 
+-- Server-only allowlist for TMJ administration; no account is granted access by email.
+create table if not exists public.tmj_admin_users (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 -- Existing OpenAI embeddings, if present, are preserved; Cloudflare vectors use a separate column.
 alter table public.document_chunks
   add column if not exists embedding_cloudflare vector(384);
@@ -50,6 +56,7 @@ alter table public.conversations enable row level security;
 alter table public.messages enable row level security;
 alter table public.documents enable row level security;
 alter table public.document_chunks enable row level security;
+alter table public.tmj_admin_users enable row level security;
 
 drop policy if exists "users manage own conversations" on public.conversations;
 create policy "users manage own conversations" on public.conversations for all
@@ -78,6 +85,8 @@ grant select, insert, update on public.conversations to authenticated;
 grant select, insert on public.messages to authenticated;
 grant select on public.documents, public.document_chunks to authenticated;
 grant all privileges on public.conversations, public.messages, public.documents, public.document_chunks to service_role;
+revoke all on table public.tmj_admin_users from public, anon, authenticated;
+grant select, insert, update, delete on table public.tmj_admin_users to service_role;
 
 create index if not exists conversations_user_updated_idx
   on public.conversations (user_id, updated_at desc);

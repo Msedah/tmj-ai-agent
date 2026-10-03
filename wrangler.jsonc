@@ -21,7 +21,8 @@
     {
       "binding": "USAGE_DB",
       "database_name": "tmj-ai-agent-usage",
-      "database_id": "c52af0fa-2bb0-4c44-b741-6a7039f87d9f"
+      "database_id": "c52af0fa-2bb0-4c44-b741-6a7039f87d9f",
+      "migrations_dir": "migrations/d1"
     }
   ],
   "previews": {

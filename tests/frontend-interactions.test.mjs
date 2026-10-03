@@ -16,6 +16,10 @@ const styles = readFileSync(new URL("../public/styles.css", import.meta.url), "u
 });
 
 test("document attachment is inside the message composer and developer contact is absent", () => {
+  assert.match(markup, /src="\/vendor\/supabase-js-2\.117\.2\.js" defer/);
+  assert.match(markup, /src="\/app\.js" defer/);
+  assert.ok(markup.indexOf("/vendor/supabase-js-2.117.2.js") < markup.indexOf("/app.js"), "the pinned client loads before the student app");
+  assert.doesNotMatch(markup, /cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js/);
   const composer = markup.match(/<form id="chatForm"[\s\S]*?<\/form>/)?.[0] || "";
   assert.match(composer, /id="documentFile"/);
   assert.match(composer, /id="attachDocument"/);
