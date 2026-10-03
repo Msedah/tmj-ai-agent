@@ -421,6 +421,34 @@ function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfil
   return element;
 }
 
+function addDocumentMessage(uploadedDocument) {
+  const element = document.createElement("article");
+  element.className = "message document-message";
+  element.setAttribute("role", "note");
+
+  const label = document.createElement("span");
+  label.className = "document-message-label";
+  label.textContent = "Document in this chat";
+  element.appendChild(label);
+
+  const name = document.createElement("strong");
+  name.className = "document-message-name";
+  name.textContent = String(uploadedDocument?.fileName || uploadedDocument?.file_name || "Uploaded study material");
+  element.appendChild(name);
+
+  const moduleCode = String(uploadedDocument?.moduleCode || uploadedDocument?.module_code || "").trim();
+  if (moduleCode) {
+    const module = document.createElement("span");
+    module.className = "document-message-module";
+    module.textContent = `Module ${moduleCode}`;
+    element.appendChild(module);
+  }
+
+  $("messages").appendChild(element);
+  $("messages").scrollTop = $("messages").scrollHeight;
+  return element;
+}
+
 function clearAttachment() {
   if (documentFile) documentFile.value = "";
   $("moduleCode").value = "";
@@ -809,7 +837,7 @@ chatForm.addEventListener("submit", async (event) => {
           const indexResponse = await fetch("/api/index-document", {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-            body: JSON.stringify({ storagePath: path, fileName: file.name, fileSize: file.size, moduleCode: $("moduleCode").value.trim().toUpperCase() })
+            body: JSON.stringify({ storagePath: path, fileName: file.name, fileSize: file.size, moduleCode: $("moduleCode").value.trim().toUpperCase(), conversationId: currentConversation?.id || null })
           });
           const indexData = await readJson(indexResponse);
           if (!indexResponse.ok) {
@@ -832,6 +860,8 @@ chatForm.addEventListener("submit", async (event) => {
             continue;
           }
           stagedUploadPath = null;
+          if (indexData.conversationId) currentConversation = { id: indexData.conversationId };
+          addDocumentMessage(indexData.document || { fileName: file.name, moduleCode: $("moduleCode").value.trim().toUpperCase() });
           indexedCount += 1;
         } catch (error) {
           uploadErrors.push(`${file.name}: ${error?.message || "Upload failed."}`);
@@ -843,7 +873,9 @@ chatForm.addEventListener("submit", async (event) => {
         }
       }
       retainAttachmentFiles(failedFiles);
-      if (indexedCount) await refreshDailyUsage();
+      if (indexedCount) {
+        await Promise.all([refreshDailyUsage(), loadConversations()]);
+      }
       if (uploadLimitReached && !dailyUsage?.uploadAllowed) {
         setStatus(uploadStatus, `${indexedCount} of ${files.length} selected ${files.length === 1 ? "document was" : "documents were"} indexed. ${UPLOAD_LIMIT_MESSAGE}`, "limit");
       } else if (uploadErrors.length) {
@@ -916,7 +948,7 @@ chatForm.addEventListener("submit", async (event) => {
 
 async function deleteConversation(id, button) {
   if (!session || !id) return;
-  const message = "Delete this conversation and all its messages? This cannot be undone.";
+  const message = "Delete this conversation, its messages, and its uploaded documents? This cannot be undone.";
   if (typeof window.confirm === "function" && !window.confirm(message)) return;
 
   button.disabled = true;
@@ -973,7 +1005,7 @@ async function loadConversations() {
       openButton.setAttribute("aria-label", `Open conversation: ${title}`);
       openButton.addEventListener("click", () => {
         setSidebarOpen(false);
-        loadConversation(conversation.id);
+        return loadConversation(conversation.id);
       });
 
       const deleteButton = document.createElement("button");
@@ -999,15 +1031,29 @@ async function loadConversations() {
 async function loadConversation(id) {
   if (!supabaseClient || !session) return;
   try {
-    const { data, error } = await supabaseClient
-      .from("messages")
-      .select("role,content")
-      .eq("conversation_id", id)
-      .order("created_at", { ascending: true });
-    if (error) throw error;
+    const [messageResult, documentResult] = await Promise.all([
+      supabaseClient.from("messages")
+        .select("role,content,created_at")
+        .eq("conversation_id", id)
+        .order("created_at", { ascending: true }),
+      supabaseClient.from("documents")
+        .select("file_name,module_code,created_at")
+        .eq("conversation_id", id)
+        .eq("source_type", "student_upload")
+        .order("created_at", { ascending: true })
+    ]);
+    if (messageResult.error) throw messageResult.error;
+    if (documentResult.error) throw documentResult.error;
     currentConversation = { id };
     $("messages").replaceChildren();
-    for (const message of data || []) addMessage(message.role, message.content);
+    const timeline = [
+      ...(messageResult.data || []).map(item => ({ ...item, kind: "message" })),
+      ...(documentResult.data || []).map(item => ({ ...item, kind: "document" }))
+    ].sort((a, b) => Date.parse(a.created_at || 0) - Date.parse(b.created_at || 0));
+    for (const item of timeline) {
+      if (item.kind === "document") addDocumentMessage(item);
+      else addMessage(item.role, item.content);
+    }
     setStatus(chatStatus, "Conversation loaded.", "success");
   } catch {
     setStatus(chatStatus, "Could not load that conversation. Please try again.");

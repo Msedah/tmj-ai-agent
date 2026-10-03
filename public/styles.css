@@ -168,6 +168,10 @@ a { color: inherit; }
 .message { width: fit-content; max-width: min(84%, 720px); margin: 0 0 14px; padding: 12px 15px; border-radius: 17px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.user { margin-left: auto; color: #fff; background: var(--green); border-bottom-right-radius: 5px; }
 .message.assistant { color: #27363c; background: #f4f5f6; border: 1px solid #eaebed; border-bottom-left-radius: 5px; }
+.message.document-message { width: min(100%, 520px); margin-right: auto; display: grid; gap: 4px; color: #27363c; background: #f6faf7; border: 1px solid #dce9e1; border-bottom-left-radius: 5px; white-space: normal; }
+.document-message-label { color: var(--green-dark); font-size: 0.69rem; font-weight: 750; letter-spacing: 0.04em; text-transform: uppercase; }
+.document-message-name { overflow-wrap: anywhere; font-size: 0.91rem; }
+.document-message-module { color: #64736e; font-size: 0.74rem; }
 .message.assistant.developer-answer { width: min(100%, 640px); max-width: 100%; padding: 8px; background: transparent; border: 0; }
 .developer-profile-card { width: 100%; overflow: hidden; color: var(--ink); background: #fff; border: 1px solid #dfe7e3; border-radius: 16px; box-shadow: 0 5px 18px rgba(30, 42, 50, 0.07); white-space: normal; }
 .developer-profile-photo { display: block; width: 100%; height: clamp(240px, 45vw, 380px); object-fit: contain; object-position: center; background: #edf3ef; }
