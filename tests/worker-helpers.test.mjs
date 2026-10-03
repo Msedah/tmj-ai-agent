@@ -97,13 +97,13 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   const database = mockUsageDatabase(({ sql, bindings }) => {
     calls.push({ sql, bindings });
     return sql.includes("INSERT INTO") ? { chat_count: 35, upload_count: 0 } : {
-      user_chat_count: 7, user_chat_limit: 35, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 349
+      user_chat_count: 7, user_chat_limit: DAILY_CHAT_LIMIT, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 349
     };
   });
 
   assert.equal(utcUsageDay(now), "2026-10-01");
   assert.equal(nextUtcResetAt(now), "2026-10-02T00:00:00.000Z");
-  assert.equal(DAILY_CHAT_LIMIT, 35);
+  assert.equal(DAILY_CHAT_LIMIT, 60);
   assert.equal(GLOBAL_DAILY_CHAT_LIMIT, 350);
   assert.equal(DAILY_UPLOAD_LIMIT, 40 * 1024 * 1024);
   assert.equal(MAX_DAILY_USERS, 10);
@@ -119,13 +119,13 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
     uploadBytesRemaining: DAILY_UPLOAD_LIMIT,
     resetAt: null
   });
-  assert.deepEqual(calls[0].bindings, ["2026-10-01", "opaque-user-id", 35]);
+  assert.deepEqual(calls[0].bindings, ["2026-10-01", "opaque-user-id", 60]);
   assert.match(calls[0].sql, /SUM\(chat_count\)/);
   assert.match(calls[0].sql, /upload_bytes/);
 
   const consumed = await consumeDailyUsage(database, "opaque-user-id", "chat", now);
   assert.equal(consumed.allowed, true);
-  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 35, 350, DAILY_UPLOAD_LIMIT, 10, 0]);
+  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 60, 350, DAILY_UPLOAD_LIMIT, 10, 0]);
   assert.match(calls[1].sql, /ON CONFLICT \(usage_date, user_id\) DO UPDATE/);
   assert.match(calls[1].sql, /RETURNING chat_count, upload_count/);
   assert.match(calls[1].sql, /\?3 = 'upload' OR daily_usage\.chat_count < COALESCE\(\(SELECT chat_limit FROM daily_chat_allocations WHERE user_id = \?2\), \?4\)/);
@@ -145,27 +145,39 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   assert.equal(existingTester.uploadAllowed, true);
   assert.equal(existingTester.resetAt, null);
 
-  const chatsExhausted = await getDailyUsageStatus(mockUsageDatabase({
+  const sharedChatsExhausted = await getDailyUsageStatus(mockUsageDatabase({
     user_chat_count: 35, user_upload_count: 2, user_upload_bytes: 1024, global_chat_count: 350, user_active: 1, active_users_count: 10
   }), "active-user", now);
-  assert.equal(chatsExhausted.chatAllowed, false);
-  assert.equal(chatsExhausted.uploadAllowed, true, "upload bytes have a separate daily budget from chats");
+  assert.equal(sharedChatsExhausted.chatAllowed, false);
+  assert.equal(sharedChatsExhausted.uploadAllowed, true, "upload bytes have a separate daily budget from chats");
 
   const denied = await consumeDailyUsage(mockUsageDatabase(null), "opaque-user-id", "chat", now);
   assert.deepEqual(denied, { allowed: false, resetAt: "2026-10-02T00:00:00.000Z" });
   assert.match(DAILY_LIMIT_MESSAGE, /come back tomorrow/i);
 });
 
-test("per-account daily chat allocations override the 35-message default but remain under the shared cap", async () => {
+test("default daily chat limit is 60 requests and allocations remain under the shared cap", async () => {
   const now = new Date("2026-10-01T12:00:00.000Z");
-  const allocated = await getDailyUsageStatus(mockUsageDatabase({
-    user_chat_count: 35, user_chat_limit: 50, user_upload_count: 0, user_upload_bytes: 0,
+  const oneRemaining = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 59, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
     global_chat_count: 200, user_active: 1, active_users_count: 3
   }), "active-user", now);
-  assert.equal(allocated.chatAllowed, true, "an allocation above 35 grants that account the extra daily requests");
+  assert.equal(oneRemaining.chatAllowed, true, "the default permits the 60th request to be sent");
+
+  const defaultReached = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 60, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 200, user_active: 1, active_users_count: 3
+  }), "active-user", now);
+  assert.equal(defaultReached.chatAllowed, false, "the default blocks requests after 60 for the day");
+
+  const allocated = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 60, user_chat_limit: 80, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 200, user_active: 1, active_users_count: 3
+  }), "active-user", now);
+  assert.equal(allocated.chatAllowed, true, "an allocation above 60 grants that account extra daily requests");
 
   const reachedAllocation = await getDailyUsageStatus(mockUsageDatabase({
-    user_chat_count: 50, user_chat_limit: 50, user_upload_count: 0, user_upload_bytes: 0,
+    user_chat_count: 80, user_chat_limit: 80, user_upload_count: 0, user_upload_bytes: 0,
     global_chat_count: 200, user_active: 1, active_users_count: 3
   }), "active-user", now);
   assert.equal(reachedAllocation.chatAllowed, false, "the account is denied after its assigned daily limit");

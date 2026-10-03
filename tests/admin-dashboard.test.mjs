@@ -136,7 +136,7 @@ test("admin dashboard returns app-local totals and only active account usage to 
     assert.equal(payload.totalChats, 15);
     assert.equal(payload.sharedChatLimit, 350);
     assert.equal(payload.sharedChatsRemaining, 335);
-    assert.equal(payload.defaultDailyChatLimit, 35);
+    assert.equal(payload.defaultDailyChatLimit, 60);
     assert.equal(payload.users[0].email, "active@example.com");
     assert.equal(payload.users[0].chatCount, 7);
     assert.equal(payload.users[0].dailyChatLimit, 50);
