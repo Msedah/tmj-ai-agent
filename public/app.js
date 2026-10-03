@@ -106,7 +106,7 @@ aboutToggle?.addEventListener("click", () => {
   const about = $("about");
   const show = Boolean(about?.hidden);
   if (about) about.hidden = !show;
-  aboutToggle.textContent = show ? "Hide About & privacy" : "About & privacy";
+  aboutToggle.textContent = show ? "Hide About" : "About";
   aboutToggle.setAttribute("aria-expanded", String(show));
   if (show) about?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   if (isMobileSidebar()) setSidebarOpen(false);
@@ -487,6 +487,16 @@ function retainAttachmentFiles(files) {
   updateComposerLabel();
 }
 
+function resizePrompt() {
+  const textarea = $("prompt");
+  if (!textarea?.style) return;
+  const maxHeight = 180;
+  textarea.style.height = "auto";
+  const contentHeight = Math.max(0, Number(textarea.scrollHeight) || 0);
+  textarea.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  textarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+}
+
 function updateComposerLabel() {
   const hasFile = Boolean(documentFile?.files?.length);
   const hasQuestion = Boolean($("prompt")?.value.trim());
@@ -504,9 +514,9 @@ function updateComposerLabel() {
   if (attachDocument) attachDocument.disabled = uploadBlocked;
   if (documentFile) documentFile.disabled = uploadBlocked;
   if (label && !isSubmitting) {
-    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & ask" : "Upload") : "Ask TMJ AI"));
+    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & send" : "Upload") : "Send message"));
   }
-  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload and ask a question" : "Upload selected study material") : "Send message")));
+  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload and send message" : "Upload selected study material") : "Send message")));
 }
 
 $("attachDocument").addEventListener("click", () => {
@@ -553,13 +563,17 @@ $("removeAttachment").addEventListener("click", () => {
   setStatus(uploadStatus, "Attached document removed.", "info");
 });
 
-$("prompt").addEventListener("input", updateComposerLabel);
+$("prompt").addEventListener("input", () => {
+  resizePrompt();
+  updateComposerLabel();
+});
 
 $("messages").addEventListener("click", event => {
   const starter = event.target?.closest?.(".starter-prompt");
   const value = starter?.getAttribute("data-starter-prompt");
   if (!value) return;
   $("prompt").value = value;
+  resizePrompt();
   updateComposerLabel();
   $("prompt").focus();
 });
@@ -763,6 +777,7 @@ $("newChat").addEventListener("click", () => {
   setSidebarOpen(false);
   currentConversation = null;
   chatForm.reset();
+  resizePrompt();
   clearAttachment();
   renderWelcome();
   if (session && dailyUsage && !dailyUsage.chatAllowed) setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
@@ -933,7 +948,10 @@ chatForm.addEventListener("submit", async (event) => {
       }
       appendAnswerActions(answer, data.reply || "No response was returned.");
       if (data.conversationId) currentConversation = { id: data.conversationId };
-      if ($("prompt").value.trim() === prompt) $("prompt").value = "";
+      if ($("prompt").value.trim() === prompt) {
+        $("prompt").value = "";
+        resizePrompt();
+      }
       updateComposerLabel();
       setStatus(chatStatus, "", "success");
       await loadConversations();
@@ -979,7 +997,6 @@ async function deleteConversation(id, button) {
       $("messages").replaceChildren();
       renderWelcome();
     }
-    setStatus(chatStatus, "Conversation deleted.", "success");
     await loadConversations();
   } catch (error) {
     setStatus(chatStatus, error?.message || "Could not delete this conversation. Please try again.");
