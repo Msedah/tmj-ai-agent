@@ -227,6 +227,7 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
 
 function normalizeDeveloperProfile(value) {
   if (!value || typeof value !== "object") return null;
+  const purpose = String(value.purpose || "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI support accessible for everyday questions and to support NWU students in understanding concepts and working with their own study materials. I hope to use AI and automation to make useful information and guidance easier to access.").trim();
   const name = String(value.name || "").trim();
   const fullName = String(value.fullName || "").trim();
   const initialsMeaning = String(value.initialsMeaning || "").trim();
@@ -242,6 +243,7 @@ function normalizeDeveloperProfile(value) {
     name,
     fullName,
     initialsMeaning,
+    purpose,
     role,
     location,
     email,
@@ -264,6 +266,7 @@ function parseDeveloperProfileReply(text) {
     name: fields.get("name"),
     fullName: fields.get("full name"),
     initialsMeaning: fields.get("tj stands for"),
+    purpose: fields.get("purpose for creating tmj ai agent"),
     role: fields.get("role"),
     location: fields.get("location"),
     email: fields.get("email"),
@@ -300,6 +303,8 @@ function appendDeveloperProfileCard(answer, candidate) {
   appendProfileText(body, "p", "developer-profile-kicker", "Developer identity");
   appendProfileText(body, "h3", "developer-profile-name", profile.name);
   appendProfileText(body, "p", "developer-profile-role", profile.role);
+  appendProfileText(body, "p", "developer-profile-purpose-title", "Why I created TMJ AI Agent");
+  appendProfileText(body, "p", "developer-profile-purpose", profile.purpose);
   appendProfileText(body, "p", "developer-profile-full-name", `Full name: ${profile.fullName}`);
   appendProfileText(body, "p", "developer-profile-initials", profile.initialsMeaning);
   appendProfileText(body, "p", "developer-profile-location", `Location: ${profile.location}`);

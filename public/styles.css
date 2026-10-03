@@ -179,6 +179,8 @@ a { color: inherit; }
 .developer-profile-kicker { margin: 0 0 1px; color: var(--green); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.13em; text-transform: uppercase; }
 .developer-profile-name { margin: 0; color: #202a31; font-size: 1.2rem; font-weight: 750; letter-spacing: -0.025em; line-height: 1.2; }
 .developer-profile-role { margin: 0 0 4px; color: #60716e; font-size: 0.82rem; font-weight: 650; }
+.developer-profile-purpose-title { margin: 5px 0 0; color: #334c43; font-size: 0.82rem; font-weight: 750; }
+.developer-profile-purpose { margin: 0 0 4px; color: #56636a; font-size: 0.82rem; line-height: 1.5; }
 .developer-profile-full-name, .developer-profile-initials, .developer-profile-location { margin: 0; color: #56636a; font-size: 0.82rem; line-height: 1.45; }
 .developer-profile-contacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .developer-contact-link { min-height: 38px; display: inline-flex; align-items: center; padding: 8px 11px; color: var(--green-dark); background: #f0f7f3; border: 1px solid #dcebe3; border-radius: 9px; font-size: 0.79rem; font-weight: 700; text-decoration: none; overflow-wrap: anywhere; }
