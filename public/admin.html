@@ -61,7 +61,7 @@
               <article class="admin-metric-card">
                 <span>Active accounts</span>
                 <strong id="activeUsersValue">—</strong>
-                <small id="activeUsersCaption">of 10 daily accounts</small>
+                <small id="activeUsersCaption">active today · up to 10 can use the chat pilot</small>
               </article>
               <article class="admin-metric-card">
                 <span>Chat requests used</span>
@@ -100,10 +100,11 @@
                 <div>
                   <p class="eyebrow">ACCOUNT ACTIVITY</p>
                   <h2 id="activeAccountsTitle">Active accounts today</h2>
-                  <p>Set a daily TMJ chat-request limit for an account. The shared 350-request cap and 10-account pilot cap remain in force.</p>
+                  <p>Accounts active through sign-in or daily usage appear automatically; last-active times show authenticated activity where available. This view refreshes every 30 seconds and lists up to 100 recent accounts. Set a daily TMJ chat-request limit for an account; the shared 350-request and 10-account chat-pilot caps remain in force.</p>
                 </div>
                 <button id="refreshAdminDashboard" class="admin-secondary-button" type="button">Refresh</button>
               </div>
+              <p id="adminUserListCaption" class="admin-user-list-caption">Accounts active through sign-in or daily usage appear here automatically.</p>
               <div id="adminUsers" class="admin-users-list" aria-live="polite"></div>
             </section>
           </div>

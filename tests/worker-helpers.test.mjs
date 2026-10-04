@@ -453,6 +453,28 @@ test("chat route returns a clear 503 when required production bindings are absen
 
 test("usage status requires authentication and returns eligibility without exposing counts", async () => {
   const originalFetch = globalThis.fetch;
+  const databaseCalls = [];
+  const database = {
+    prepare(sql) {
+      return {
+        bind(...bindings) {
+          return {
+            first: async () => {
+              databaseCalls.push({ method: "first", sql, bindings });
+              return {
+                user_chat_count: 35, user_upload_count: 1, user_upload_bytes: 0,
+                global_chat_count: 350, active_users_count: 0
+              };
+            },
+            run: async () => {
+              databaseCalls.push({ method: "run", sql, bindings });
+              return { success: true };
+            }
+          };
+        }
+      };
+    }
+  };
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
@@ -467,7 +489,7 @@ test("usage status requires authentication and returns eligibility without expos
     }), {
       SUPABASE_URL: "https://test-project.supabase.co",
       SUPABASE_ANON_KEY: "test-anon-key",
-      USAGE_DB: mockUsageDatabase({ user_chat_count: 35, user_upload_count: 1, user_upload_bytes: 0, global_chat_count: 350 })
+      USAGE_DB: database
     });
     assert.equal(response.status, 200);
     const payload = await response.json();
@@ -476,6 +498,15 @@ test("usage status requires authentication and returns eligibility without expos
     assert.ok(Number.isFinite(Date.parse(payload.resetAt)));
     assert.deepEqual(Object.keys(payload).sort(), ["chatAllowed", "resetAt", "uploadAllowed"]);
     assert.doesNotMatch(JSON.stringify(payload), /count|points|neurons|remaining/i);
+    const activity = databaseCalls.find(call => call.method === "run" && call.sql.includes("daily_user_activity"));
+    assert.ok(activity, "an authenticated usage check records the signed-in account’s presence");
+    assert.match(activity.sql, /ON CONFLICT \(activity_date, user_id\) DO UPDATE/);
+    assert.match(activity.sql, /last_seen_at = excluded\.last_seen_at/);
+    assert.equal(activity.bindings[0], utcUsageDay(new Date()));
+    assert.equal(activity.bindings[1], "student-1");
+    assert.ok(Number.isFinite(Date.parse(activity.bindings[2])));
+    assert.equal(databaseCalls.some(call => /INSERT INTO daily_usage/.test(call.sql)), false,
+      "a sign-in activity record does not consume one of the 10 quota-account slots");
   } finally {
     globalThis.fetch = originalFetch;
   }

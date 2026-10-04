@@ -71,13 +71,15 @@ npm test
 
 - `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document-indexing configuration. NWU ingestion is reported separately. Health does not consume an AI request or guarantee remaining daily quota.
 - `POST /api/chat` — authenticated user question or task, relevant evidence retrieval, and conversation persistence.
-- `GET /api/admin/dashboard` — admin-allowlisted daily aggregates and active-account details.
+- `GET /api/admin/dashboard` — daily aggregates and account activity, accessible only to the UUID-allowlisted owner with an exactly matching, verified email.
 - `PUT /api/admin/users/{id}/chat-limit` — admin-allowlisted daily account limit, bounded to 0–350 and audited by administrator ID.
 - `DELETE /api/conversations/{id}` — authenticated deletion of the signed-in user's conversation; related messages are removed by the database cascade.
-
-Student uploads are associated with the conversation in which they were indexed. Reopening a recent conversation restores its document cards, and semantic retrieval can use that conversation's uploads only. Uploading while no chat is open creates a conversation; adding another file in the same session attaches it to that chat. Deleting a conversation removes its associated document records and private storage files.
 - `POST /api/index-document` — authenticated indexing of an uploaded user document.
 - `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
+
+Student uploads are associated with the conversation in which they were indexed. Reopening a recent conversation restores its document cards, and semantic retrieval can use that conversation's uploads only. Uploading while no chat is open creates a conversation; adding another file in the same session attaches it to that chat. Deleting a conversation removes its associated document records and private storage files.
+
+The admin dashboard unions authenticated sign-in activity with daily usage rows, so sign-ins without chats and existing usage-only rows remain visible. It refreshes every 30 seconds, lists up to 100 recent accounts, and keeps the active-account count separate from the 10-account chat-pilot cap. D1 activity stores only account UUIDs and first/last authenticated timestamps—not email addresses or message content; email is resolved only for the authorized admin view.
 
 ## Deployment verification
 

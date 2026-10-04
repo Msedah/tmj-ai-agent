@@ -201,6 +201,7 @@ export const DAILY_CHAT_LIMIT = 60;
 export const GLOBAL_DAILY_CHAT_LIMIT = 350;
 export const DAILY_UPLOAD_LIMIT = 40 * 1024 * 1024;
 export const MAX_DAILY_USERS = 10;
+const MAX_ADMIN_ACTIVITY_ROWS = 100;
 export const MAX_DOCUMENT_BYTES = DAILY_UPLOAD_LIMIT;
 export const MAX_DOCUMENT_CHUNKS = 20;
 const MAX_DOCUMENT_TEXT_CHARS = 25_000;
@@ -289,6 +290,16 @@ export async function getDailyUsageStatus(database, userId, now = new Date(), ow
     uploadBytesRemaining: Math.max(0, DAILY_UPLOAD_LIMIT - uploadBytesUsed),
     resetAt: chatAllowed && uploadAllowed ? null : nextUtcResetAt(now)
   };
+}
+
+async function recordDailyUserActivity(database, userId, now = new Date()) {
+  const timestamp = now.toISOString();
+  await database.prepare(`
+    INSERT INTO daily_user_activity (activity_date, user_id, first_seen_at, last_seen_at)
+    VALUES (?1, ?2, ?3, ?3)
+    ON CONFLICT (activity_date, user_id) DO UPDATE SET
+      last_seen_at = excluded.last_seen_at
+  `).bind(utcUsageDay(now), String(userId), timestamp).run();
 }
 
 export async function consumeDailyUsage(database, userId, kind, now = new Date(), uploadBytes = 0) {
@@ -388,7 +399,13 @@ async function handleUsageStatus(request, env) {
   const auth = await authenticate(request, env);
   if (auth.error) return auth.error;
   try {
-    const status = await getDailyUsageStatus(env.USAGE_DB, auth.user.id);
+    const now = new Date();
+    const status = await getDailyUsageStatus(env.USAGE_DB, auth.user.id, now);
+    try {
+      await recordDailyUserActivity(env.USAGE_DB, auth.user.id, now);
+    } catch {
+      // Presence logging is best-effort and must not block a user's quota check.
+    }
     return json(200, {
       chatAllowed: status.chatAllowed,
       uploadAllowed: status.uploadAllowed,
@@ -402,6 +419,15 @@ async function handleUsageStatus(request, env) {
 async function authorizeAdmin(request, env) {
   const auth = await authenticate(request, env);
   if (auth.error) return { error: auth.error };
+  const email = auth.user.email;
+  const emailVerified = typeof auth.user.email_confirmed_at === "string" && auth.user.email_confirmed_at.length > 0;
+  if (email !== "mailulajosep@gmail.com" || !emailVerified) {
+    return { error: json(403, {
+      error: "Admin access is restricted to the verified owner account.",
+      code: "ADMIN_NOT_ALLOWED",
+      userId: auth.user.id
+    }) };
+  }
   if (!env.SUPABASE_SERVICE_ROLE_KEY) {
     return { error: json(503, { error: "Admin access is not configured.", code: "ADMIN_NOT_CONFIGURED" }) };
   }
@@ -440,30 +466,49 @@ async function handleAdminDashboard(request, env) {
   const day = utcUsageDay(now);
   try {
     const summary = await env.USAGE_DB.prepare(`
-      SELECT COUNT(*) AS active_users,
-             COALESCE(SUM(chat_count), 0) AS total_chats,
-             COALESCE(SUM(upload_count), 0) AS total_uploads,
-             COALESCE(SUM(upload_bytes), 0) AS total_upload_bytes,
+      SELECT (SELECT COUNT(*) FROM (
+               SELECT user_id FROM daily_user_activity WHERE activity_date = ?1
+               UNION
+               SELECT user_id FROM daily_usage WHERE usage_date = ?1
+             ) AS active_accounts) AS active_users,
+             COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_chats,
+             COALESCE((SELECT SUM(upload_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_uploads,
+             COALESCE((SELECT SUM(upload_bytes) FROM daily_usage WHERE usage_date = ?1), 0) AS total_upload_bytes,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_committed_milli,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) AS owner_ai_neurons_committed_milli
-      FROM daily_usage
-      WHERE usage_date = ?1
     `).bind(day).first();
     const result = await env.USAGE_DB.prepare(`
-      SELECT usage.user_id, usage.chat_count, usage.upload_count, usage.upload_bytes,
+      WITH active_accounts AS (
+        SELECT user_id, first_seen_at, last_seen_at
+        FROM daily_user_activity
+        WHERE activity_date = ?1
+        UNION ALL
+        SELECT usage.user_id, NULL AS first_seen_at, NULL AS last_seen_at
+        FROM daily_usage AS usage
+        WHERE usage.usage_date = ?1
+          AND NOT EXISTS (
+            SELECT 1 FROM daily_user_activity AS activity
+            WHERE activity.activity_date = ?1 AND activity.user_id = usage.user_id
+          )
+      )
+      SELECT activity.user_id, activity.first_seen_at, activity.last_seen_at,
+             COALESCE(usage.chat_count, 0) AS chat_count,
+             COALESCE(usage.upload_count, 0) AS upload_count,
+             COALESCE(usage.upload_bytes, 0) AS upload_bytes,
              COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit,
              COALESCE(ai_usage.neurons_used_milli, 0) AS ai_neurons_used_milli,
              COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli
-      FROM daily_usage AS usage
-      LEFT JOIN daily_chat_allocations AS allocation ON allocation.user_id = usage.user_id
+      FROM active_accounts AS activity
+      LEFT JOIN daily_usage AS usage
+        ON usage.usage_date = ?1 AND usage.user_id = activity.user_id
+      LEFT JOIN daily_chat_allocations AS allocation ON allocation.user_id = activity.user_id
       LEFT JOIN daily_ai_neuron_usage AS ai_usage
-        ON ai_usage.usage_date = usage.usage_date AND ai_usage.user_id = usage.user_id
-      WHERE usage.usage_date = ?1
-      ORDER BY usage.chat_count DESC, usage.upload_bytes DESC
+        ON ai_usage.usage_date = ?1 AND ai_usage.user_id = activity.user_id
+      ORDER BY COALESCE(activity.last_seen_at, '') DESC, COALESCE(usage.chat_count, 0) DESC, COALESCE(usage.upload_bytes, 0) DESC
       LIMIT ?3
-    `).bind(day, DAILY_CHAT_LIMIT, MAX_DAILY_USERS).all();
+    `).bind(day, DAILY_CHAT_LIMIT, MAX_ADMIN_ACTIVITY_ROWS).all();
     const userRows = Array.isArray(result?.results) ? result.results : [];
     const users = await Promise.all(userRows.map(async row => {
       let email = null;
@@ -478,6 +523,8 @@ async function handleAdminDashboard(request, env) {
       return {
         userId: String(row.user_id),
         email,
+        firstSeenAt: row.first_seen_at ? String(row.first_seen_at) : null,
+        lastSeenAt: row.last_seen_at ? String(row.last_seen_at) : null,
         chatCount,
         dailyChatLimit,
         chatsRemaining: Math.max(0, dailyChatLimit - chatCount),
@@ -487,14 +534,17 @@ async function handleAdminDashboard(request, env) {
         uploadBytes: Number(row.upload_bytes || 0)
       };
     }));
+    const activeUsers = Number(summary?.active_users || 0);
     const totalChats = Number(summary?.total_chats || 0);
     const sharedAiNeuronsCommitted = Number(summary?.shared_ai_neurons_committed_milli || 0) / NEURON_MILLI_SCALE;
     const ownerAiNeuronsCommitted = Number(summary?.owner_ai_neurons_committed_milli || 0) / NEURON_MILLI_SCALE;
     return json(200, {
       utcDay: day,
       resetsAt: nextUtcResetAt(now),
-      activeUsers: Number(summary?.active_users || 0),
+      activeUsers,
       activeUserLimit: MAX_DAILY_USERS,
+      userListLimit: MAX_ADMIN_ACTIVITY_ROWS,
+      usersTruncated: activeUsers > users.length,
       users,
       totalChats,
       sharedChatLimit: GLOBAL_DAILY_CHAT_LIMIT,
