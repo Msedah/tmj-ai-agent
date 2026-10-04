@@ -1,5 +1,5 @@
 -- Daily app-local Workers AI Neuron estimates and in-flight reservations, kept separate from chat counts.
--- Rows contain only UTC day and Supabase UUID; old daily rows age out by date and no raw prompts are stored.
+-- Rows store UTC days, pseudonymous account/system keys, pool labels, and counters; prompt content is never stored.
 CREATE TABLE IF NOT EXISTS daily_ai_neuron_usage (
   usage_date TEXT NOT NULL,
   user_id TEXT NOT NULL,
