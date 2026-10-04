@@ -16,7 +16,7 @@ test("D1 migration discovery is isolated from root-level Supabase migrations", (
   const usageDatabase = wranglerConfig.d1_databases.find(database => database.binding === "USAGE_DB");
   assert.equal(usageDatabase?.migrations_dir, "migrations/d1");
   const d1Migrations = readdirSync(new URL("../migrations/d1/", import.meta.url)).filter(name => name.endsWith(".sql")).sort();
-  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql"]);
+  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql", "0004_daily_ai_neuron_usage.sql"]);
   assert.ok(!d1Migrations.includes("0005_tmj_admin_users.sql"), "the PostgreSQL allowlist migration must never be sent to D1");
 });
 
@@ -123,8 +123,14 @@ test("admin dashboard returns app-local totals and only active account usage to 
   const mock = configureSupabaseFetch();
   globalThis.fetch = mock.fetch;
   const database = adminDatabase({
-    summary: { active_users: 1, total_chats: 15, total_uploads: 3, total_upload_bytes: 38_328 },
-    users: [{ user_id: ACTIVE_USER_ID, chat_count: 7, upload_count: 3, upload_bytes: 38_328, daily_chat_limit: 50 }]
+    summary: {
+      active_users: 1, total_chats: 15, total_uploads: 3, total_upload_bytes: 38_328,
+      shared_ai_neurons_committed_milli: 1_250_000, owner_ai_neurons_committed_milli: 25_500
+    },
+    users: [{
+      user_id: ACTIVE_USER_ID, chat_count: 7, upload_count: 3, upload_bytes: 38_328,
+      daily_chat_limit: 50, ai_neurons_used_milli: 45_000, ai_neurons_reserved_milli: 5_000
+    }]
   });
   try {
     const response = await worker.fetch(new Request("https://example.test/api/admin/dashboard", {
@@ -136,12 +142,22 @@ test("admin dashboard returns app-local totals and only active account usage to 
     assert.equal(payload.totalChats, 15);
     assert.equal(payload.sharedChatLimit, 350);
     assert.equal(payload.sharedChatsRemaining, 335);
-    assert.equal(payload.defaultDailyChatLimit, 35);
+    assert.equal(payload.defaultDailyChatLimit, 60);
+    assert.deepEqual(payload.estimatedNeurons, {
+      sharedCommitted: 1250,
+      sharedLimit: 9000,
+      sharedRemaining: 7750,
+      ownerCommitted: 25.5,
+      ownerLimit: 1000,
+      ownerRemaining: 974.5
+    });
     assert.equal(payload.users[0].email, "active@example.com");
     assert.equal(payload.users[0].chatCount, 7);
     assert.equal(payload.users[0].dailyChatLimit, 50);
     assert.equal(payload.users[0].chatsRemaining, 43);
-    assert.match(payload.usageNote, /not Cloudflare Neurons/);
+    assert.equal(payload.users[0].aiNeuronsUsed, 45);
+    assert.equal(payload.users[0].aiNeuronsReserved, 5);
+    assert.match(payload.usageNote, /TMJ-only estimates/);
     assert.ok(mock.requests.some(({ url }) => url.pathname.includes("/auth/v1/admin/users/")));
   } finally {
     globalThis.fetch = originalFetch;
@@ -282,5 +298,7 @@ test("admin allocation page uses existing sign-in only and contains no hard-code
   assert.doesNotMatch(`${adminMarkup}\n${adminScript}`, /service_role|SUPABASE_SERVICE_ROLE_KEY/i);
   assert.match(adminScript, /auth\.onAuthStateChange/);
   assert.match(adminStyles, /@media \(max-width: 430px\)/);
-  assert.match(adminMarkup, /not a Cloudflare AI-points balance or total Neuron usage/);
+  assert.match(adminMarkup, /Neuron figures are TMJ-only estimates/);
+  assert.match(adminMarkup, /sharedNeuronsValue/);
+  assert.match(adminMarkup, /ownerNeuronsValue/);
 });

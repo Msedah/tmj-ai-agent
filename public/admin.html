@@ -57,7 +57,7 @@
           </section>
 
           <div id="adminDashboardContent" hidden>
-            <section class="admin-metrics" aria-label="Today's TMJ usage">
+            <section class="admin-metrics" aria-label="Today's TMJ usage and estimated AI Neurons">
               <article class="admin-metric-card">
                 <span>Active accounts</span>
                 <strong id="activeUsersValue">—</strong>
@@ -74,6 +74,16 @@
                 <small>TMJ app allowance</small>
               </article>
               <article class="admin-metric-card">
+                <span>Shared-user Neurons used / held</span>
+                <strong id="sharedNeuronsValue">—</strong>
+                <small id="sharedNeuronsCaption">of 9,000 estimated Neurons</small>
+              </article>
+              <article class="admin-metric-card admin-metric-highlight">
+                <span>My Neuron allocation used / held</span>
+                <strong id="ownerNeuronsValue">—</strong>
+                <small id="ownerNeuronsCaption">of 1,000 estimated Neurons</small>
+              </article>
+              <article class="admin-metric-card">
                 <span>Uploads today</span>
                 <strong id="uploadsValue">—</strong>
                 <small id="uploadsCaption">—</small>
@@ -82,7 +92,7 @@
 
             <aside class="admin-usage-note">
               <strong>About these numbers</strong>
-              <p>These figures show TMJ's app request limits, not a Cloudflare AI-points balance or total Neuron usage across your Cloudflare account. <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Open Cloudflare dashboard</a>.</p>
+              <p>Neuron figures are TMJ-only estimates: chat uses Workers AI token usage and published model rates; embeddings use conservative input estimates. Figures include actual charges plus reservations held during active or uncertain requests. Other Cloudflare AI activity is not included, so the <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare dashboard</a> remains the source for account-wide billed usage.</p>
             </aside>
 
             <section class="admin-users-section" aria-labelledby="activeAccountsTitle">

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "General-purpose AI assistant with a focus on NWU student support.",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/nwu-search.js && node --check public/app.js && node --check public/admin.js",
+    "check": "node --check src/index.js && node --check src/ai-usage.js && node --check src/nwu-search.js && node --check public/app.js && node --check public/admin.js",
     "test": "node --experimental-wasm-modules --test",
     "deploy": "wrangler deploy --config wrangler.jsonc"
   },

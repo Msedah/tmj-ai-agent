@@ -27,6 +27,19 @@ import worker, {
   utcUsageDay
 } from "../src/index.js";
 import {
+  actualChatNeuronsMilli,
+  calculateChatNeuronsMilli,
+  DailyAiNeuronLimitError,
+  DAILY_OWNER_NEURON_LIMIT_MILLI,
+  DAILY_USER_SHARED_NEURON_LIMIT_MILLI,
+  estimateChatNeuronsMilli,
+  estimateEmbeddingNeuronsMilli,
+  fingerprintUserId,
+  reserveDailyAiNeurons,
+  runMeteredAi,
+  settleDailyAiNeurons
+} from "../src/ai-usage.js";
+import {
   buildNwuSearchQuery,
   extractPublicPdfLinks,
   isPublicNwuUrl,
@@ -97,14 +110,16 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   const database = mockUsageDatabase(({ sql, bindings }) => {
     calls.push({ sql, bindings });
     return sql.includes("INSERT INTO") ? { chat_count: 35, upload_count: 0 } : {
-      user_chat_count: 7, user_chat_limit: 35, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 349
+      user_chat_count: 7, user_chat_limit: DAILY_CHAT_LIMIT, user_upload_count: 0, user_upload_bytes: 0, global_chat_count: 349
     };
   });
 
   assert.equal(utcUsageDay(now), "2026-10-01");
   assert.equal(nextUtcResetAt(now), "2026-10-02T00:00:00.000Z");
-  assert.equal(DAILY_CHAT_LIMIT, 35);
+  assert.equal(DAILY_CHAT_LIMIT, 60);
   assert.equal(GLOBAL_DAILY_CHAT_LIMIT, 350);
+  assert.equal(DAILY_USER_SHARED_NEURON_LIMIT_MILLI, 9_000_000);
+  assert.equal(DAILY_OWNER_NEURON_LIMIT_MILLI, 1_000_000);
   assert.equal(DAILY_UPLOAD_LIMIT, 40 * 1024 * 1024);
   assert.equal(MAX_DAILY_USERS, 10);
   assert.equal(MAX_DOCUMENT_BYTES, 40 * 1024 * 1024);
@@ -114,18 +129,20 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   assert.deepEqual(status, {
     chatAllowed: true,
     uploadAllowed: true,
+    aiBudgetAvailable: true,
     uploadCount: 0,
     uploadBytesUsed: 0,
     uploadBytesRemaining: DAILY_UPLOAD_LIMIT,
     resetAt: null
   });
-  assert.deepEqual(calls[0].bindings, ["2026-10-01", "opaque-user-id", 35]);
+  assert.deepEqual(calls[0].bindings, ["2026-10-01", "opaque-user-id", 60]);
   assert.match(calls[0].sql, /SUM\(chat_count\)/);
   assert.match(calls[0].sql, /upload_bytes/);
+  assert.match(calls[0].sql, /daily_ai_neuron_usage/);
 
   const consumed = await consumeDailyUsage(database, "opaque-user-id", "chat", now);
   assert.equal(consumed.allowed, true);
-  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 35, 350, DAILY_UPLOAD_LIMIT, 10, 0]);
+  assert.deepEqual(calls[1].bindings, ["2026-10-01", "opaque-user-id", "chat", 60, 350, DAILY_UPLOAD_LIMIT, 10, 0]);
   assert.match(calls[1].sql, /ON CONFLICT \(usage_date, user_id\) DO UPDATE/);
   assert.match(calls[1].sql, /RETURNING chat_count, upload_count/);
   assert.match(calls[1].sql, /\?3 = 'upload' OR daily_usage\.chat_count < COALESCE\(\(SELECT chat_limit FROM daily_chat_allocations WHERE user_id = \?2\), \?4\)/);
@@ -145,27 +162,39 @@ test("daily usage helpers use UTC dates, return no balances, and parameterize at
   assert.equal(existingTester.uploadAllowed, true);
   assert.equal(existingTester.resetAt, null);
 
-  const chatsExhausted = await getDailyUsageStatus(mockUsageDatabase({
+  const sharedChatsExhausted = await getDailyUsageStatus(mockUsageDatabase({
     user_chat_count: 35, user_upload_count: 2, user_upload_bytes: 1024, global_chat_count: 350, user_active: 1, active_users_count: 10
   }), "active-user", now);
-  assert.equal(chatsExhausted.chatAllowed, false);
-  assert.equal(chatsExhausted.uploadAllowed, true, "upload bytes have a separate daily budget from chats");
+  assert.equal(sharedChatsExhausted.chatAllowed, false);
+  assert.equal(sharedChatsExhausted.uploadAllowed, true, "upload bytes have a separate daily budget from chats");
 
   const denied = await consumeDailyUsage(mockUsageDatabase(null), "opaque-user-id", "chat", now);
   assert.deepEqual(denied, { allowed: false, resetAt: "2026-10-02T00:00:00.000Z" });
   assert.match(DAILY_LIMIT_MESSAGE, /come back tomorrow/i);
 });
 
-test("per-account daily chat allocations override the 35-message default but remain under the shared cap", async () => {
+test("default daily chat limit is 60 requests and allocations remain under the shared cap", async () => {
   const now = new Date("2026-10-01T12:00:00.000Z");
-  const allocated = await getDailyUsageStatus(mockUsageDatabase({
-    user_chat_count: 35, user_chat_limit: 50, user_upload_count: 0, user_upload_bytes: 0,
+  const oneRemaining = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 59, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
     global_chat_count: 200, user_active: 1, active_users_count: 3
   }), "active-user", now);
-  assert.equal(allocated.chatAllowed, true, "an allocation above 35 grants that account the extra daily requests");
+  assert.equal(oneRemaining.chatAllowed, true, "the default permits the 60th request to be sent");
+
+  const defaultReached = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 60, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 200, user_active: 1, active_users_count: 3
+  }), "active-user", now);
+  assert.equal(defaultReached.chatAllowed, false, "the default blocks requests after 60 for the day");
+
+  const allocated = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 60, user_chat_limit: 80, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 200, user_active: 1, active_users_count: 3
+  }), "active-user", now);
+  assert.equal(allocated.chatAllowed, true, "an allocation above 60 grants that account extra daily requests");
 
   const reachedAllocation = await getDailyUsageStatus(mockUsageDatabase({
-    user_chat_count: 50, user_chat_limit: 50, user_upload_count: 0, user_upload_bytes: 0,
+    user_chat_count: 80, user_chat_limit: 80, user_upload_count: 0, user_upload_bytes: 0,
     global_chat_count: 200, user_active: 1, active_users_count: 3
   }), "active-user", now);
   assert.equal(reachedAllocation.chatAllowed, false, "the account is denied after its assigned daily limit");
@@ -175,6 +204,119 @@ test("per-account daily chat allocations override the 35-message default but rem
     global_chat_count: 350, user_active: 1, active_users_count: 3
   }), "active-user", now);
   assert.equal(sharedLimitReached.chatAllowed, false, "no account allocation bypasses the shared 350-request ceiling");
+
+  const sharedNeuronsExhausted = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 0, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 0, user_active: 1, active_users_count: 1, shared_ai_neurons_milli: 9_000_000
+  }), "active-user", now);
+  assert.equal(sharedNeuronsExhausted.aiBudgetAvailable, false);
+  assert.equal(sharedNeuronsExhausted.chatAllowed, false);
+  assert.equal(sharedNeuronsExhausted.uploadAllowed, false);
+
+  const testOwnerId = "synthetic-owner-test-id";
+  const testOwnerFingerprint = await fingerprintUserId(testOwnerId);
+  const ownerNeuronsExhausted = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 0, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 0, user_active: 1, active_users_count: 1, owner_ai_neurons_milli: 1_000_000
+  }), testOwnerId, now, testOwnerFingerprint);
+  assert.equal(ownerNeuronsExhausted.aiBudgetAvailable, false);
+  assert.equal(ownerNeuronsExhausted.chatAllowed, false);
+  assert.equal(ownerNeuronsExhausted.uploadAllowed, false);
+});
+
+test("Workers AI Neuron estimates use published rates and reserve conservative inference ceilings", () => {
+  assert.equal(calculateChatNeuronsMilli({ prompt_tokens: 1_000_000, completion_tokens: 0 }), 4_625_000);
+  assert.equal(calculateChatNeuronsMilli({ prompt_tokens: 0, completion_tokens: 1_000_000 }), 30_475_000);
+  assert.equal(calculateChatNeuronsMilli({ prompt_tokens: 1 }), null, "missing token counts fall back to a conservative reservation");
+
+  const messages = [{ role: "system", content: "System instructions." }, { role: "user", content: "Hello" }];
+  const estimate = estimateChatNeuronsMilli(messages, 1200);
+  const actualAtOutputCap = calculateChatNeuronsMilli({ prompt_tokens: 80, completion_tokens: 1200 });
+  assert.ok(estimate >= actualAtOutputCap, "preflight reservation covers the byte-based prompt upper bound and output cap");
+  assert.equal(estimateEmbeddingNeuronsMilli(["x".repeat(5000)]), 943, "BGE's 512-token input ceiling is conservatively reserved");
+  assert.ok(estimateEmbeddingNeuronsMilli(["short query"]) > 0);
+  assert.equal(DAILY_USER_SHARED_NEURON_LIMIT_MILLI, 9_000_000);
+  assert.equal(DAILY_OWNER_NEURON_LIMIT_MILLI, 1_000_000);
+});
+
+test("daily Neuron reservations atomically separate the verified owner reserve from the shared user pool", async () => {
+  const now = new Date("2026-10-01T23:30:00.000Z");
+  const calls = [];
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        calls.push({ sql, bindings });
+        return { first: async () => ({ user_id: bindings[1] }) };
+      } };
+    }
+  };
+
+  assert.deepEqual(await reserveDailyAiNeurons(database, "student-id", 2500, now), { allowed: true, resetAt: null });
+  assert.deepEqual(calls[0].bindings, ["2026-10-01", "student-id", "shared", 2500, now.toISOString(), 1_000_000, 9_000_000]);
+  assert.match(calls[0].sql, /SUM\(neurons_used_milli \+ neurons_reserved_milli\)/);
+  assert.match(calls[0].sql, /budget_pool = 'shared'/);
+
+  assert.deepEqual(await reserveDailyAiNeurons(database, "system:nwu-indexing", 1250, now, "owner"), { allowed: true, resetAt: null });
+  assert.deepEqual(calls[1].bindings.slice(1), ["system:nwu-indexing", "owner", 1250, now.toISOString(), 1_000_000, 9_000_000]);
+  assert.match(calls[1].sql, /budget_pool = 'owner'/);
+
+  const denied = await reserveDailyAiNeurons({ prepare: () => ({ bind: () => ({ first: async () => null }) }) }, "student-id", 1, now);
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.resetAt, "2026-10-02T00:00:00.000Z");
+});
+
+test("metered Workers AI settles reported chat tokens and never invokes AI when reservation fails", async () => {
+  const calls = [];
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        calls.push({ sql, bindings });
+        return { first: async () => ({ user_id: bindings[1] }) };
+      } };
+    }
+  };
+  const usage = { prompt_tokens: 120, completion_tokens: 30 };
+  let aiCalls = 0;
+  const result = await runMeteredAi("chat-model", { messages: [] }, {
+    USAGE_DB: database,
+    AI: { async run() { aiCalls += 1; return { response: "answer", usage }; } }
+  }, "student-id", 50_000, actualChatNeuronsMilli);
+  assert.equal(result.response, "answer");
+  assert.equal(aiCalls, 1);
+  assert.equal(calls.length, 2, "one atomic reservation and one settlement are recorded");
+  assert.match(calls[0].sql, /INSERT INTO daily_ai_neuron_usage/);
+  assert.match(calls[1].sql, /UPDATE daily_ai_neuron_usage/);
+  assert.equal(calls[0].bindings[2], "shared");
+  assert.equal(calls[0].bindings[3], 50_000);
+  assert.equal(calls[1].bindings[2], 50_000);
+  assert.equal(calls[1].bindings[3], calculateChatNeuronsMilli(usage));
+
+  let deniedAiCalls = 0;
+  await assert.rejects(() => runMeteredAi("chat-model", {}, {
+    USAGE_DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
+    AI: { async run() { deniedAiCalls += 1; return {}; } }
+  }, "student-id", 1, actualChatNeuronsMilli), DailyAiNeuronLimitError);
+  assert.equal(deniedAiCalls, 0, "budget denial happens before Cloudflare AI inference");
+});
+
+test("a failed AI inference keeps its reservation held conservatively until daily reset", async () => {
+  const calls = [];
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        calls.push({ sql, bindings });
+        return { first: async () => ({ user_id: bindings[1] }) };
+      } };
+    }
+  };
+  await assert.rejects(() => runMeteredAi("chat-model", {}, {
+    USAGE_DB: database,
+    AI: { async run() { throw new Error("temporary model failure"); } }
+  }, "student-id", 10_000, actualChatNeuronsMilli), /temporary model failure/);
+  assert.equal(calls.length, 1, "uncertain provider failure leaves the full reservation held");
+
+  await settleDailyAiNeurons(database, "student-id", 10_000, 0, new Date("2026-10-01T23:30:00Z"));
+  assert.equal(calls[1].bindings[2], 10_000);
 });
 
 test("health route reports service readiness without exposing values", async () => {
@@ -525,7 +667,10 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
         USAGE_DB: {
           prepare(sql) {
             return { bind(...bindings) { return { first: async () => {
-              if (sql.includes('INSERT INTO')) {
+              if (sql.includes('INSERT INTO daily_ai_neuron_usage') || sql.includes('UPDATE daily_ai_neuron_usage')) {
+                return { user_id: bindings[1] };
+              }
+              if (sql.includes('INSERT INTO daily_usage')) {
                 assert.equal(bindings[2], 'upload');
                 assert.equal(bindings[7], file.bytes.byteLength);
                 if (uploadBytes + bindings[7] > DAILY_UPLOAD_LIMIT) return null;
@@ -634,7 +779,10 @@ test("failed document embeddings refund the atomic upload-byte claim", async () 
       USAGE_DB: {
         prepare(sql) {
           return { bind(...bindings) {
-            if (sql.includes("INSERT INTO")) return { first: async () => {
+            if (sql.includes("INSERT INTO daily_ai_neuron_usage") || sql.includes("UPDATE daily_ai_neuron_usage")) {
+              return { first: async () => ({ user_id: bindings[1] }) };
+            }
+            if (sql.includes("INSERT INTO daily_usage")) return { first: async () => {
               uploadBytes += bindings[7];
               uploadCount += 1;
               return { chat_count: 35, upload_count: uploadCount };
@@ -974,6 +1122,7 @@ test("chat retrieval is limited to the active conversation and retains recent tu
 test("protected NWU indexing rejects eFundi/private and external URLs before fetching", async () => {
   const env = {
     AI: { async run() { throw new Error("should not be called"); } },
+    USAGE_DB: { prepare() { throw new Error("invalid URLs must be rejected before usage access"); } },
     SUPABASE_URL: "https://project.supabase.co",
     SUPABASE_SERVICE_ROLE_KEY: "service-key",
     NWU_INGEST_SECRET: "ingest-secret"

@@ -2,6 +2,18 @@ import { createClient } from "@supabase/supabase-js";
 import { OfficeParser } from "officeparser";
 import { extractText, getDocumentProxy } from "unpdf";
 import { fetchNwuPublicDocument, normalizePublicNwuUrl, searchNwuLiveSources } from "./nwu-search.js";
+import {
+  actualChatNeuronsMilli,
+  actualEmbeddingNeuronsMilli,
+  DailyAiNeuronLimitError,
+  DAILY_OWNER_NEURON_LIMIT,
+  DAILY_USER_SHARED_NEURON_LIMIT,
+  estimateChatNeuronsMilli,
+  estimateEmbeddingNeuronsMilli,
+  isOwnerAiBudgetUser,
+  NEURON_MILLI_SCALE,
+  runMeteredAi
+} from "./ai-usage.js";
 
 let WasmDocument;
 if (typeof globalThis.WebSocketPair === "function") {
@@ -185,7 +197,7 @@ export function shouldSearchNwuLiveSources(message = "", hasConversationUploads 
 const CHAT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
 const EMBEDDING_DIMENSIONS = 384;
-export const DAILY_CHAT_LIMIT = 35;
+export const DAILY_CHAT_LIMIT = 60;
 export const GLOBAL_DAILY_CHAT_LIMIT = 350;
 export const DAILY_UPLOAD_LIMIT = 40 * 1024 * 1024;
 export const MAX_DAILY_USERS = 10;
@@ -206,7 +218,13 @@ const DAILY_USAGE_STATUS_QUERY = `
     COALESCE((SELECT upload_bytes FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2), 0) AS user_upload_bytes,
     COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS global_chat_count,
     CASE WHEN EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2) THEN 1 ELSE 0 END AS user_active,
-    (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) AS active_users_count
+    (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) AS active_users_count,
+    COALESCE((SELECT neurons_used_milli + neurons_reserved_milli FROM daily_ai_neuron_usage
+      WHERE usage_date = ?1 AND user_id = ?2), 0) AS account_ai_neurons_milli,
+    COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+      WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_milli,
+    COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+      WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) AS owner_ai_neurons_milli
 `;
 
 const DAILY_USAGE_CONSUME_QUERY = `
@@ -239,10 +257,14 @@ export function nextUtcResetAt(now = new Date()) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)).toISOString();
 }
 
-export async function getDailyUsageStatus(database, userId, now = new Date()) {
+export async function getDailyUsageStatus(database, userId, now = new Date(), ownerFingerprint) {
   if (!database || typeof database.prepare !== "function") throw new Error("Daily usage database is not configured.");
   const day = utcUsageDay(now);
-  const row = await database.prepare(DAILY_USAGE_STATUS_QUERY).bind(day, String(userId), DAILY_CHAT_LIMIT).first();
+  const accountId = String(userId);
+  const accountIsOwner = await isOwnerAiBudgetUser(accountId, ownerFingerprint);
+  const row = await database.prepare(DAILY_USAGE_STATUS_QUERY)
+    .bind(day, accountId, DAILY_CHAT_LIMIT)
+    .first();
   const userChats = Number(row?.user_chat_count || 0);
   const userUploads = Number(row?.user_upload_count || 0);
   const uploadBytesUsed = Number(row?.user_upload_bytes || 0);
@@ -251,11 +273,17 @@ export async function getDailyUsageStatus(database, userId, now = new Date()) {
   const userActive = Number(row?.user_active || 0) > 0;
   const activeUsers = Number(row?.active_users_count || 0);
   const canJoinPilot = userActive || activeUsers < MAX_DAILY_USERS;
-  const chatAllowed = canJoinPilot && userChats < userChatLimit && globalChats < GLOBAL_DAILY_CHAT_LIMIT;
-  const uploadAllowed = canJoinPilot && uploadBytesUsed < DAILY_UPLOAD_LIMIT;
+  const aiNeuronsUsed = accountIsOwner
+    ? Number(row?.owner_ai_neurons_milli || 0)
+    : Number(row?.shared_ai_neurons_milli || 0);
+  const aiNeuronLimit = (accountIsOwner ? DAILY_OWNER_NEURON_LIMIT : DAILY_USER_SHARED_NEURON_LIMIT) * NEURON_MILLI_SCALE;
+  const aiBudgetAvailable = aiNeuronsUsed < aiNeuronLimit;
+  const chatAllowed = canJoinPilot && userChats < userChatLimit && globalChats < GLOBAL_DAILY_CHAT_LIMIT && aiBudgetAvailable;
+  const uploadAllowed = canJoinPilot && uploadBytesUsed < DAILY_UPLOAD_LIMIT && aiBudgetAvailable;
   return {
     chatAllowed,
     uploadAllowed,
+    aiBudgetAvailable,
     uploadCount: userUploads,
     uploadBytesUsed,
     uploadBytesRemaining: Math.max(0, DAILY_UPLOAD_LIMIT - uploadBytesUsed),
@@ -288,6 +316,27 @@ async function releaseDailyUploadUsage(database, userId, uploadBytes, now = new 
   } catch {
     // A refund failure must not hide the original indexing error.
   }
+}
+
+async function releaseDailyChatUsage(database, userId, now = new Date()) {
+  try {
+    await database.prepare(`
+      UPDATE daily_usage
+      SET chat_count = chat_count - 1
+      WHERE usage_date = ?1 AND user_id = ?2 AND chat_count > 0
+    `).bind(utcUsageDay(now), String(userId)).run();
+  } catch {
+    // A failed quota refund must not hide the AI budget denial.
+  }
+}
+
+function dailyAiLimitResponse() {
+  const now = new Date();
+  return json(429, {
+    error: DAILY_LIMIT_MESSAGE,
+    code: "DAILY_AI_NEURON_LIMIT_REACHED",
+    resetAt: nextUtcResetAt(now)
+  });
 }
 
 export default {
@@ -394,15 +443,23 @@ async function handleAdminDashboard(request, env) {
       SELECT COUNT(*) AS active_users,
              COALESCE(SUM(chat_count), 0) AS total_chats,
              COALESCE(SUM(upload_count), 0) AS total_uploads,
-             COALESCE(SUM(upload_bytes), 0) AS total_upload_bytes
+             COALESCE(SUM(upload_bytes), 0) AS total_upload_bytes,
+             COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+               WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_committed_milli,
+             COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+               WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) AS owner_ai_neurons_committed_milli
       FROM daily_usage
       WHERE usage_date = ?1
     `).bind(day).first();
     const result = await env.USAGE_DB.prepare(`
       SELECT usage.user_id, usage.chat_count, usage.upload_count, usage.upload_bytes,
-             COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit
+             COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit,
+             COALESCE(ai_usage.neurons_used_milli, 0) AS ai_neurons_used_milli,
+             COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli
       FROM daily_usage AS usage
       LEFT JOIN daily_chat_allocations AS allocation ON allocation.user_id = usage.user_id
+      LEFT JOIN daily_ai_neuron_usage AS ai_usage
+        ON ai_usage.usage_date = usage.usage_date AND ai_usage.user_id = usage.user_id
       WHERE usage.usage_date = ?1
       ORDER BY usage.chat_count DESC, usage.upload_bytes DESC
       LIMIT ?3
@@ -424,11 +481,15 @@ async function handleAdminDashboard(request, env) {
         chatCount,
         dailyChatLimit,
         chatsRemaining: Math.max(0, dailyChatLimit - chatCount),
+        aiNeuronsUsed: Number(row.ai_neurons_used_milli || 0) / NEURON_MILLI_SCALE,
+        aiNeuronsReserved: Number(row.ai_neurons_reserved_milli || 0) / NEURON_MILLI_SCALE,
         uploadCount: Number(row.upload_count || 0),
         uploadBytes: Number(row.upload_bytes || 0)
       };
     }));
     const totalChats = Number(summary?.total_chats || 0);
+    const sharedAiNeuronsCommitted = Number(summary?.shared_ai_neurons_committed_milli || 0) / NEURON_MILLI_SCALE;
+    const ownerAiNeuronsCommitted = Number(summary?.owner_ai_neurons_committed_milli || 0) / NEURON_MILLI_SCALE;
     return json(200, {
       utcDay: day,
       resetsAt: nextUtcResetAt(now),
@@ -439,9 +500,17 @@ async function handleAdminDashboard(request, env) {
       sharedChatLimit: GLOBAL_DAILY_CHAT_LIMIT,
       sharedChatsRemaining: Math.max(0, GLOBAL_DAILY_CHAT_LIMIT - totalChats),
       defaultDailyChatLimit: DAILY_CHAT_LIMIT,
+      estimatedNeurons: {
+        sharedCommitted: sharedAiNeuronsCommitted,
+        sharedLimit: DAILY_USER_SHARED_NEURON_LIMIT,
+        sharedRemaining: Math.max(0, DAILY_USER_SHARED_NEURON_LIMIT - sharedAiNeuronsCommitted),
+        ownerCommitted: ownerAiNeuronsCommitted,
+        ownerLimit: DAILY_OWNER_NEURON_LIMIT,
+        ownerRemaining: Math.max(0, DAILY_OWNER_NEURON_LIMIT - ownerAiNeuronsCommitted)
+      },
       totalUploads: Number(summary?.total_uploads || 0),
       totalUploadBytes: Number(summary?.total_upload_bytes || 0),
-      usageNote: "These are TMJ app request limits, not Cloudflare Neurons or account-wide AI balance."
+      usageNote: "Neuron figures are TMJ-only estimates based on Workers AI token usage and published rates; embedding input usage is conservatively estimated. Other AI workloads on the Cloudflare account are not included; use Cloudflare's dashboard for account-wide billed usage."
     });
   } catch {
     return json(503, { error: "Could not load today's admin usage. Please try again shortly.", code: "ADMIN_USAGE_UNAVAILABLE" });
@@ -503,9 +572,10 @@ async function handleChat(request, env) {
     if (!conversation) return json(404, { error: "Conversation not found." });
   }
 
+  const requestStartedAt = new Date();
   let usage;
   try {
-    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "chat");
+    usage = await consumeDailyUsage(env.USAGE_DB, auth.user.id, "chat", requestStartedAt);
   } catch {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
   }
@@ -551,11 +621,15 @@ async function handleChat(request, env) {
     const retrievalQuery = [message.slice(0, 850), ...previousQuestions, ...documentNames].join("\n").slice(0, 1200);
     const searchNwu = shouldSearchNwuLiveSources(message, conversationDocuments.length > 0);
     const [embeddingResult, liveResult] = await Promise.all([
-      embedMany([retrievalQuery], env),
+      embedMany([retrievalQuery], env, { userId: auth.user.id }),
       searchNwu
         ? searchNwuLiveSources(message, { pdfParser: parsePdfForRetrieval }).catch(() => ({ sources: [], searchUrl: null }))
         : Promise.resolve({ sources: [], searchUrl: null })
     ]);
+    if (embeddingResult.code === "DAILY_AI_NEURON_LIMIT_REACHED") {
+      await releaseDailyChatUsage(env.USAGE_DB, auth.user.id, requestStartedAt);
+      return dailyAiLimitResponse();
+    }
     liveSources = Array.isArray(liveResult?.sources) ? liveResult.sources : [];
     nwuSearchUrl = liveResult?.searchUrl || null;
 
@@ -612,8 +686,12 @@ async function handleChat(request, env) {
         { role: "system", content: SYSTEM_PROMPT },
         ...priorTurns,
         { role: "user", content: prompt }
-      ], env));
-    } catch {
+      ], env, { userId: auth.user.id }));
+    } catch (error) {
+      if (error instanceof DailyAiNeuronLimitError) {
+        await releaseDailyChatUsage(env.USAGE_DB, auth.user.id, requestStartedAt);
+        return dailyAiLimitResponse();
+      }
       return json(503, { error: "Cloudflare AI is temporarily unavailable. If the free daily allowance has been reached, try again after it resets." });
     }
   }
@@ -730,6 +808,7 @@ async function handleDocumentIndex(request, env) {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
   }
   if (!initialUsageStatus.uploadAllowed) {
+    if (!initialUsageStatus.aiBudgetAvailable) return dailyAiLimitResponse();
     return json(429, { error: DAILY_UPLOAD_LIMIT_MESSAGE, code: "DAILY_UPLOAD_LIMIT_REACHED", resetAt: initialUsageStatus.resetAt });
   }
   if (declaredFileSize > initialUsageStatus.uploadBytesRemaining) {
@@ -782,6 +861,7 @@ async function handleDocumentIndex(request, env) {
       return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
     }
     if (!status.uploadAllowed) {
+      if (!status.aiBudgetAvailable) return dailyAiLimitResponse();
       return json(429, { error: DAILY_UPLOAD_LIMIT_MESSAGE, code: "DAILY_UPLOAD_LIMIT_REACHED", resetAt: status.resetAt });
     }
     return json(413, {
@@ -794,9 +874,10 @@ async function handleDocumentIndex(request, env) {
   const embeddings = [];
   for (let i = 0; i < chunks.length; i += 20) {
     const batch = chunks.slice(i, i + 20);
-    const embedding = await embedMany(batch, env);
+    const embedding = await embedMany(batch, env, { userId: auth.user.id });
     if (!embedding.ok) {
       await releaseDailyUploadUsage(env.USAGE_DB, auth.user.id, buffer.byteLength);
+      if (embedding.code === "DAILY_AI_NEURON_LIMIT_REACHED") return dailyAiLimitResponse();
       return json(embedding.status, { error: embedding.error });
     }
     embeddings.push(...embedding.embeddings);
@@ -848,7 +929,7 @@ async function handleNwuIndex(request, env) {
   if (request.method !== "POST") return json(405, { error: "Method not allowed" });
   if (!env.NWU_INGEST_SECRET) return json(503, { error: "NWU ingest secret is not configured." });
   if (request.headers.get("x-tmj-ingest-secret") !== env.NWU_INGEST_SECRET) return json(401, { error: "Unauthorized" });
-  if (!env.AI || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return json(503, { error: "Cloudflare AI ingestion service is not configured." });
+  if (!env.AI || !env.USAGE_DB || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return json(503, { error: "Cloudflare AI ingestion service is not configured." });
 
   let body;
   try { body = await request.json(); } catch { return json(400, { error: "Invalid JSON" }); }
@@ -863,6 +944,15 @@ async function handleNwuIndex(request, env) {
   const chunks = chunkText(text, 1400, 200);
   if (chunks.length > MAX_NWU_CHUNKS) return json(413, { error: "Source is too large for one free-quota indexing operation; ingest a more specific page." });
 
+  const embeddings = [];
+  for (let i = 0; i < chunks.length; i += 20) {
+    const batch = chunks.slice(i, i + 20);
+    const embedding = await embedMany(batch, env, { userId: "system:nwu-indexing", budgetPool: "owner" });
+    if (embedding.code === "DAILY_AI_NEURON_LIMIT_REACHED") return dailyAiLimitResponse();
+    if (!embedding.ok) return json(embedding.status, { error: embedding.error });
+    embeddings.push(...embedding.embeddings);
+  }
+
   const admin = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
   const storagePath = "nwu-official:" + url;
   await admin.from("documents").delete().eq("storage_path", storagePath);
@@ -874,35 +964,57 @@ async function handleNwuIndex(request, env) {
   if (docError) return json(500, { error: docError.message });
 
   for (let i = 0; i < chunks.length; i += 20) {
-    const batch = chunks.slice(i, i + 20);
-    const embedding = await embedMany(batch, env);
-    if (!embedding.ok) return json(embedding.status, { error: embedding.error });
-    const rows = batch.map((content, j) => ({ document_id: doc.id, user_id: null, chunk_index: i + j, content, embedding_cloudflare: embedding.embeddings[j] }));
-    const { error } = await admin.from("document_chunks").insert(rows);
-    if (error) return json(500, { error: error.message });
+    const rows = chunks.slice(i, i + 20).map((content, j) => ({
+      document_id: doc.id, user_id: null, chunk_index: i + j, content, embedding_cloudflare: embeddings[i + j]
+    }));
+    const { error: chunkError } = await admin.from("document_chunks").insert(rows);
+    if (chunkError) {
+      await admin.from("documents").delete().eq("id", doc.id).eq("storage_path", storagePath);
+      return json(500, { error: chunkError.message });
+    }
   }
   return json(200, { ok: true, message: "NWU source indexed successfully.", url, chunks: chunks.length });
 }
 
-export async function embedMany(inputs, env) {
+export async function embedMany(inputs, env, { userId, budgetPool } = {}) {
   if (!env.AI || typeof env.AI.run !== "function") {
     return { ok: false, status: 503, error: "Cloudflare AI is not configured." };
   }
   try {
-    const result = await env.AI.run(EMBEDDING_MODEL, { text: inputs.map(String) });
+    const estimateMilli = estimateEmbeddingNeuronsMilli(inputs);
+    const result = await runMeteredAi(
+      EMBEDDING_MODEL,
+      { text: inputs.map(String) },
+      env,
+      userId,
+      estimateMilli,
+      actualEmbeddingNeuronsMilli,
+      budgetPool
+    );
     const embeddings = result?.data;
     if (!Array.isArray(embeddings) || embeddings.length !== inputs.length || embeddings.some(vector => !Array.isArray(vector) || vector.length !== EMBEDDING_DIMENSIONS)) {
       return { ok: false, status: 502, error: "Cloudflare returned an unexpected embedding response." };
     }
     return { ok: true, embeddings };
-  } catch {
+  } catch (error) {
+    if (error instanceof DailyAiNeuronLimitError) {
+      return { ok: false, status: 429, code: "DAILY_AI_NEURON_LIMIT_REACHED", error: DAILY_LIMIT_MESSAGE };
+    }
     return { ok: false, status: 503, error: "Cloudflare embedding service is temporarily unavailable. If the free daily allowance has been reached, try again after it resets." };
   }
 }
 
-export async function generateChatResponse(messages, env) {
+export async function generateChatResponse(messages, env, { userId } = {}) {
   if (!env.AI || typeof env.AI.run !== "function") throw new Error("Cloudflare AI is not configured.");
-  const result = await env.AI.run(CHAT_MODEL, { messages, temperature: 0.2, max_tokens: 1200 });
+  const maxOutputTokens = 1200;
+  const result = await runMeteredAi(
+    CHAT_MODEL,
+    { messages, temperature: 0.2, max_tokens: maxOutputTokens },
+    env,
+    userId,
+    estimateChatNeuronsMilli(messages, maxOutputTokens),
+    actualChatNeuronsMilli
+  );
   const response = typeof result?.response === "string" ? result.response.trim() : "";
   if (!response) throw new Error("Cloudflare returned an empty response.");
   return response;
