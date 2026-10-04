@@ -17,6 +17,8 @@ const ADMIN_DEFAULT_CHAT_LIMIT = 60;
 const ADMIN_SHARED_CHAT_LIMIT = 350;
 let adminSupabase = null;
 let adminSession = null;
+let adminDashboardRequestVersion = 0;
+const unsavedAdminLimits = new Map();
 
 function setAdminStatus(element, message, type = "") {
   if (!element) return;
@@ -66,12 +68,24 @@ function formatNeurons(value) {
   return Number(value || 0).toLocaleString("en-ZA", { maximumFractionDigits: 2 });
 }
 
+function formatActivityTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp)) return "earlier today (time unavailable)";
+  return new Intl.DateTimeFormat("en-ZA", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Africa/Johannesburg"
+  }).format(new Date(timestamp));
+}
+
+function hasFocusedAdminLimitForm() {
+  return Boolean(document.activeElement?.closest?.(".admin-limit-form"));
+}
+
 function renderUsers(users) {
   adminUsers.replaceChildren();
   if (!users.length) {
     const empty = document.createElement("p");
     empty.className = "admin-empty-state";
-    empty.textContent = "No accounts have used TMJ today.";
+    empty.textContent = "No accounts have signed in or used TMJ today.";
     adminUsers.append(empty);
     return;
   }
@@ -87,7 +101,7 @@ function renderUsers(users) {
     email.textContent = account.email || `Account ${String(account.userId).slice(0, 8)}`;
     const details = document.createElement("p");
     details.className = "admin-user-details";
-    details.textContent = `${account.chatCount} chat requests used · about ${formatNeurons(account.aiNeuronsUsed)} Neurons used / ${formatNeurons(account.aiNeuronsReserved)} held · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)}`;
+    details.textContent = `${account.chatCount} chat requests used · about ${formatNeurons(account.aiNeuronsUsed)} Neurons used / ${formatNeurons(account.aiNeuronsReserved)} held · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)} · last active ${formatActivityTimestamp(account.lastSeenAt)}`;
     identity.append(email, details);
 
     const ratio = document.createElement("strong");
@@ -115,6 +129,11 @@ function renderUsers(users) {
     input.step = "1";
     input.required = true;
     input.value = String(Number.isInteger(account.dailyChatLimit) ? account.dailyChatLimit : ADMIN_DEFAULT_CHAT_LIMIT);
+    const draftLimit = unsavedAdminLimits.get(String(account.userId));
+    if (draftLimit !== undefined) {
+      if (draftLimit !== "" && Number(draftLimit) === Number(input.value)) unsavedAdminLimits.delete(String(account.userId));
+      else input.value = draftLimit;
+    }
     input.setAttribute("aria-label", `Daily chat limit for ${account.email || "this account"}`);
     const save = document.createElement("button");
     save.type = "submit";
@@ -130,8 +149,12 @@ function renderUsers(users) {
 function renderDashboard(data) {
   adminAccessNotice.hidden = true;
   adminDashboardContent.hidden = false;
-  adminEl("activeUsersValue").textContent = `${data.activeUsers} / ${data.activeUserLimit}`;
-  adminEl("activeUsersCaption").textContent = `of ${data.activeUserLimit} daily accounts`;
+  adminEl("activeUsersValue").textContent = String(data.activeUsers);
+  adminEl("activeUsersCaption").textContent = `active today · up to ${data.activeUserLimit} can use the chat pilot`;
+  const listLimit = Number(data.userListLimit || 100);
+  adminEl("adminUserListCaption").textContent = data.usersTruncated
+    ? `Showing the ${listLimit} most recently active accounts.`
+    : `All ${data.activeUsers} accounts active today are shown.`;
   adminEl("totalChatsValue").textContent = `${data.totalChats} / ${data.sharedChatLimit}`;
   adminEl("totalChatsCaption").textContent = `of ${data.sharedChatLimit} shared per day`;
   adminEl("sharedRemainingValue").textContent = String(data.sharedChatsRemaining);
@@ -147,22 +170,32 @@ function renderDashboard(data) {
   renderUsers(Array.isArray(data.users) ? data.users : []);
 }
 
-async function loadAdminDashboard() {
-  adminDashboardContent.hidden = true;
+async function loadAdminDashboard({ quiet = false, force = false } = {}) {
+  if (!adminSession?.access_token) return false;
+  if (!force && hasFocusedAdminLimitForm()) return false;
+  const requestVersion = ++adminDashboardRequestVersion;
   adminAccessNotice.hidden = true;
-  setAdminStatus(adminStatus, "Loading today’s usage…", "info");
+  if (!quiet) setAdminStatus(adminStatus, "Loading today’s usage…", "info");
   try {
     const data = await adminRequest("/api/admin/dashboard");
+    if (requestVersion !== adminDashboardRequestVersion) return false;
+    if (!force && hasFocusedAdminLimitForm()) return false;
     renderDashboard(data);
-    setAdminStatus(adminStatus, "Usage refreshed.", "success");
+    if (!quiet) setAdminStatus(adminStatus, "Usage refreshed.", "success");
+    return true;
   } catch (error) {
+    if (requestVersion !== adminDashboardRequestVersion) return false;
     if (error.status === 403 && error.payload?.code === "ADMIN_NOT_ALLOWED") {
       adminEl("adminAccountId").textContent = String(error.payload.userId || "Unavailable");
       adminAccessNotice.hidden = false;
-      setAdminStatus(adminStatus, "Sign-in succeeded; this account still needs explicit admin authorization.", "warning");
-      return;
+      adminDashboardContent.hidden = true;
+      setAdminStatus(adminStatus, "This dashboard is restricted to the verified, authorized owner account.", "warning");
+      return false;
     }
-    setAdminStatus(adminStatus, error.message || "Could not load the dashboard. Try again.", "error");
+    if (!quiet || adminDashboardContent.hidden) {
+      setAdminStatus(adminStatus, error.message || "Could not load the dashboard. Try again.", "error");
+    }
+    return false;
   }
 }
 
@@ -194,7 +227,7 @@ adminUsers.addEventListener("submit", async event => {
   event.preventDefault();
   const button = form.querySelector("button[type=submit]");
   const input = form.elements.dailyChatLimit;
-  const dailyChatLimit = Number(input.value);
+    const dailyChatLimit = Number(input.value);
   if (!Number.isInteger(dailyChatLimit) || dailyChatLimit < 0 || dailyChatLimit > ADMIN_SHARED_CHAT_LIMIT) {
     setAdminStatus(adminStatus, `Enter a whole-number limit from 0 to ${ADMIN_SHARED_CHAT_LIMIT}.`, "error");
     return;
@@ -207,8 +240,15 @@ adminUsers.addEventListener("submit", async event => {
       method: "PUT",
       body: JSON.stringify({ dailyChatLimit })
     });
-    await loadAdminDashboard();
-    setAdminStatus(adminStatus, "Daily message limit saved.", "success");
+    unsavedAdminLimits.delete(String(form.dataset.userId));
+    const refreshed = await loadAdminDashboard({ quiet: true, force: true });
+    if (refreshed) {
+      setAdminStatus(adminStatus, "Daily message limit saved and reflected in the dashboard.", "success");
+    } else {
+      button.disabled = false;
+      button.textContent = "Save limit";
+      setAdminStatus(adminStatus, "The limit was saved, but the dashboard could not refresh. Select Refresh to verify it.", "warning");
+    }
   } catch (error) {
     setAdminStatus(adminStatus, error.message || "Could not save the limit.", "error");
     button.disabled = false;
@@ -216,7 +256,27 @@ adminUsers.addEventListener("submit", async event => {
   }
 });
 
+adminUsers.addEventListener("input", event => {
+  const form = event.target.closest?.(".admin-limit-form");
+  if (!form) return;
+  const input = form.elements?.dailyChatLimit;
+  if (input) unsavedAdminLimits.set(String(form.dataset.userId), input.value);
+});
+
 adminEl("refreshAdminDashboard").addEventListener("click", () => void loadAdminDashboard());
+window.addEventListener?.("focus", () => {
+  if (adminSession && !adminDashboardContent.hidden && !hasFocusedAdminLimitForm()) void loadAdminDashboard({ quiet: true });
+});
+document.addEventListener?.("visibilitychange", () => {
+  if (adminSession && document.visibilityState === "visible" && !adminDashboardContent.hidden && !hasFocusedAdminLimitForm()) {
+    void loadAdminDashboard({ quiet: true });
+  }
+});
+globalThis.setInterval?.(() => {
+  if (!adminSession || adminDashboardContent.hidden || document.visibilityState === "hidden") return;
+  if (hasFocusedAdminLimitForm()) return;
+  void loadAdminDashboard({ quiet: true });
+}, 30_000);
 adminEl("adminSignOut").addEventListener("click", async () => {
   let signOutFailed = false;
   try {
