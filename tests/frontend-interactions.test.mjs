@@ -7,6 +7,8 @@ const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8"
 const markup = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const aboutMarkup = readFileSync(new URL("../public/about.html", import.meta.url), "utf8");
 const aboutScript = readFileSync(new URL("../public/about.js", import.meta.url), "utf8");
+const communityMarkup = readFileSync(new URL("../public/community.html", import.meta.url), "utf8");
+const communityScript = readFileSync(new URL("../public/community.js", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
 
  test("Supabase client uses the standard project API hostname", () => {
@@ -47,7 +49,12 @@ test("document attachment is inside the message composer and developer contact i
   assert.doesNotMatch(markup, /uploadPanel|uploadForm|developerAttribution|Developed by|mailulajosep@gmail\.com|TJ Mailula/i);
   assert.match(aboutMarkup, /<h1>About<\/h1>/);
   assert.match(aboutMarkup, /<a class="about-back-button" href="\/" data-about-back[^>]*>[\s\S]*?<span>Back<\/span>/);
-  assert.match(aboutMarkup, /independent study companion, not an official North-West University service/i);
+  assert.match(aboutMarkup, /independent general-purpose assistant/i);
+  assert.match(markup, /General AI help, with a focus on Sekororo and Limpopo/);
+  assert.match(markup, /id="responseLanguage"/);
+  assert.match(markup, /value="sepedi"/);
+  assert.match(markup, /value="xitsonga"/);
+  assert.match(markup, /value="tshivenda"/);
   assert.match(aboutMarkup, /Deleting that conversation also deletes its uploads and indexed text/i);
   assert.match(aboutMarkup, /stay with the conversation where they were added/i);
   assert.match(aboutMarkup, /Cloudflare Workers AI/);
@@ -57,7 +64,19 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(aboutMarkup, /not question text or an AI-points balance/i);
   assert.match(aboutMarkup, /00:00 UTC \(02:00 South African time\)/);
   assert.match(aboutMarkup, /Helpful\/not-helpful selections stay on this page and are not sent/i);
-  assert.match(aboutMarkup, /Live NWU public search receives topic keywords/);
+  assert.match(aboutMarkup, /question itself out of the outgoing page URLs and request parameters/i);
+  assert.match(aboutMarkup, /representative Ga-Sekororo locality point/i);
+  assert.match(aboutMarkup, /edge-cached for up to 15 minutes/i);
+  assert.doesNotMatch(aboutMarkup, /NWU|North-West University|eFundi/i);
+  assert.match(communityMarkup, /Official records also use Ga-Sekororo/);
+  assert.match(communityMarkup, /South African Post Office record lists a Moetladimo Branch, not a branch named “Metz Post Office\.”/);
+  assert.match(communityMarkup, /Weather around Ga-Sekororo/);
+  assert.match(communityMarkup, /Open-Meteo/);
+  assert.match(communityMarkup, /Mahlakung Shopping Centre/);
+  assert.match(communityMarkup, /not a live confirmation of opening hours or service availability/);
+  assert.doesNotMatch(communityMarkup, /NWU|North-West University|eFundi/i);
+  assert.match(communityScript, /\/api\/weather/);
+  assert.match(communityScript, /\/api\/community\/sources/);
   assert.match(aboutScript, /window\.history\.back\(\)/);
   assert.match(aboutScript, /cameFromChat/);
   assert.match(styles, /\.delete-conversation:focus-visible/);
@@ -291,17 +310,17 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
           },
           conversationId: "conversation-1",
           sources: [],
-          nwuSearchUrl: null
+          communitySearchUrl: null
         })
       };
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          reply: "Academic integrity is supported by the current NWU rules.",
+          reply: "The Maruleng Local Municipality vacancy page lists an advert closing on 7 October 2026.",
           conversationId: "conversation-1",
-          sources: [{ name: "NWU Senate Rules on Academic Integrity", url: "https://www.nwu.ac.za/published-rules.pdf", type: "nwu_official_live", date: "2026-08-20" }],
-          nwuSearchUrl: "https://www.nwu.ac.za/multisite-search?search_api_fulltext=academic%20integrity"
+          sources: [{ name: "Maruleng Local Municipality — Vacancies", url: "https://www.maruleng.gov.za/pages/vacancies.php", type: "official_public", date: "2026-10-07", checkedAt: "2026-10-05T15:35:00.000Z" }],
+          communitySearchUrl: "/community.html"
         })
       };
     }
@@ -365,12 +384,12 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(authCalls.length, 0, "invalid email/password does not call Supabase");
   assert.match(elements.authStatus.textContent, /valid email address and password/);
 
-  elements.authEmail.value = "  student@nwu.ac.za  ";
+  elements.authEmail.value = "  student@example.org  ";
   elements.authPassword.value = "a-valid-password";
   elements.authForm.validity = true;
   await elements.authForm.listeners.get("submit")[0]({ preventDefault() {} });
   assert.equal(authCalls[0].method, "signUp");
-  assert.equal(authCalls[0].credentials.email, "student@nwu.ac.za");
+  assert.equal(authCalls[0].credentials.email, "student@example.org");
   assert.equal(authCalls[0].credentials.password, "a-valid-password");
   assert.equal(Object.hasOwn(authCalls[0].credentials, "options"), false);
 
@@ -383,7 +402,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   elements.newChat.listeners.get("click")[0]();
   assert.equal(elements.prompt.value, "");
   assert.equal(elements.chatStatus.textContent, "", "new chat does not display a promotional success notice");
-  assert.match(elements.messages.innerHTML, /What are you studying today\?/);
+  assert.match(elements.messages.innerHTML, /What can I help with today\?/);
   const starterButton = new ElementMock("button");
   starterButton.setAttribute("data-starter-prompt", "Explain a difficult concept from my module in plain language and give one example.");
   elements.messages.listeners.get("click")[0]({ target: { closest: () => starterButton } });
@@ -535,30 +554,33 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   windowListeners.get("focus")[0]();
   await new Promise(resolve => setImmediate(resolve));
 
-  elements.prompt.value = "What does NWU publish about academic integrity?";
+  elements.prompt.value = "Find a current Maruleng public vacancy and include its closing date.";
   const sendPromise = elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
   assert.equal(elements.sendButton.getAttribute("aria-busy"), "true", "send immediately exposes its in-progress state");
   assert.match(elements.sendLabel.textContent, /Thinking|Sending/);
-  assert.equal(elements.messages.children.at(-2).textContent, "What does NWU publish about academic integrity?", "the student's message appears before the network response");
+  assert.equal(elements.messages.children.at(-2).textContent, "Find a current Maruleng public vacancy and include its closing date.", "the user's message appears before the network response");
   await sendPromise;
   const chatCall = fetchCalls.find(call => call.url === "/api/chat");
   assert.ok(chatCall, "academic question reaches the Worker");
   assert.match(chatCall.options.headers.Authorization, /^Bearer test-token$/);
   assert.equal(JSON.parse(chatCall.options.body).conversationId, "conversation-uploads", "questions after upload target the conversation that owns the files");
   const assistant = elements.messages.children.at(-1);
-  assert.match(assistant.textContent, /Academic integrity is supported/);
+  assert.match(assistant.textContent, /vacancy page lists an advert closing on 7 October 2026/);
   assert.equal(assistant.children.length, 2, "citations and accessible answer actions are separate from the AI answer text");
   const sourceSection = assistant.children[0];
   const referencesList = sourceSection.children.find(child => child.id === "ul");
   assert.ok(referencesList);
-  assert.equal(referencesList.children[0].children[0].href, "https://www.nwu.ac.za/published-rules.pdf");
-  assert.match(sourceSection.children.at(-1).textContent, /Search NWU’s public website/);
+  assert.equal(referencesList.children[0].children[0].href, "https://www.maruleng.gov.za/pages/vacancies.php");
+  assert.match(referencesList.children[0].children[1].textContent, /Date shown near item 2026-10-07/);
+  assert.match(referencesList.children[0].children[1].textContent, /Fetched by TMJ/);
+  assert.equal(sourceSection.children.at(-1).href, "/community.html");
+  assert.match(sourceSection.children.at(-1).textContent, /Browse official and community sources/);
   assert.doesNotMatch(assistant.textContent, /No sources available|Source notes:\s*None/i);
   assert.doesNotMatch(assistant.className, /developer-answer/, "ordinary academic answers do not render the developer profile");
   const answerActions = assistant.children[1];
   const copyButton = answerActions.children.find(child => child.className === "answer-action-button answer-copy");
   await copyButton.listeners.get("click")[0]();
-  assert.equal(clipboardCalls[0], "Academic integrity is supported by the current NWU rules.");
+  assert.equal(clipboardCalls[0], "The Maruleng Local Municipality vacancy page lists an advert closing on 7 October 2026.");
   assert.equal(copyButton.textContent, "Copied");
   const ratingButtons = answerActions.children.filter(child => child.className === "answer-action-button answer-feedback-button");
   ratingButtons[0].listeners.get("click")[0]();
@@ -661,7 +683,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.conversationList.children.length, 1, "successful deletion refreshes the history list");
   assert.equal(elements.conversationList.children[0].children[0].textContent, "Research methods");
   assert.notEqual(elements.chatStatus.textContent, "Conversation deleted.", "successful deletion does not display a toast message");
-  assert.match(elements.messages.innerHTML, /What are you studying today\?/, "deleting the open conversation clears it from the chat view");
+  assert.match(elements.messages.innerHTML, /What can I help with today\?/, "deleting the open conversation clears it from the chat view");
 
   authStateListener("SIGNED_OUT", null);
   await new Promise(resolve => setImmediate(resolve));

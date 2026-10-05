@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="TMJ AI Agent — helpful answers for everyday questions, with a focus on NWU student support.">
-    <title>TMJ AI Agent | Helpful Answers, NWU Study Support</title>
+    <meta name="description" content="TMJ AI Agent — general AI help and community information for Sekororo, Tzaneen and Limpopo.">
+    <title>TMJ AI Agent | General AI for Limpopo</title>
     <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
   </head>
@@ -27,8 +27,8 @@
         <div class="sidebar-spacer"></div>
         <div class="sidebar-footer">
           <div class="sidebar-note">
-            <span class="eyebrow">Independent study tool</span>
-            <p>Ask everyday questions or get NWU-focused study help alongside your course material and lecturer guidance.</p>
+            <span class="eyebrow">Community AI</span>
+            <p>Ask about everyday life, get help with documents, and explore official information for Sekororo and Limpopo.</p>
           </div>
           <p id="accountIdentity" class="account-identity" hidden></p>
           <button id="authButton" class="auth-button" type="button" aria-label="Sign in to your account">Sign in</button>
@@ -37,6 +37,7 @@
             <span class="sidebar-collapse-icon" aria-hidden="true">‹</span>
             <span class="sidebar-collapse-label">Hide left panel</span>
           </button>
+          <a class="community-link" href="/community.html">Local information</a>
           <div class="about-control">
             <a class="about-link" href="/about.html" aria-label="About TMJ AI Agent">About</a>
           </div>
@@ -53,7 +54,7 @@
             </button>
             <div class="app-heading">
               <h1>TMJ AI Agent</h1>
-              <p>Everyday help and study support for NWU students</p>
+              <p>General AI help, with a focus on Sekororo and Limpopo</p>
             </div>
           </div>
           <span class="study-pill"><span class="status-dot" aria-hidden="true"></span> AI assistant</span>
@@ -65,14 +66,14 @@
           <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text">
             <div class="welcome">
               <img class="welcome-mark" src="/tmj-mark.svg" alt="">
-              <p class="eyebrow">GENERAL HELP, WITH NWU STUDY SUPPORT</p>
-              <h2>What can I help with?</h2>
-              <p>Ask about anything, work through a date or calculation, or get help with your course material.</p>
+              <p class="eyebrow">GENERAL AI · LOCAL INFORMATION</p>
+              <h2>What can I help with today?</h2>
+              <p>Ask about anything, explore local information, get a weather forecast, or choose Sepedi, Tsonga (itsonga) or Tshivenda (Venda) for your reply.</p>
               <div class="starter-prompts" role="group" aria-label="Try a starter prompt">
-                <button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult concept from my module in plain language and give one example.">Explain a concept</button>
-                <button class="starter-prompt" type="button" data-starter-prompt="Find the current NWU rule about academic integrity and summarize it with an official source.">Find an NWU rule</button>
-                <button class="starter-prompt" type="button" data-starter-prompt="Help me make a one-week study plan for my next test. Ask what subjects and dates you need.">Build a study plan</button>
-                <button class="starter-prompt" type="button" data-starter-prompt="Quiz me one question at a time on a topic I am studying. Start by asking me the topic.">Quiz me</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="What is the latest weather forecast for Ga-Sekororo, Limpopo? Use current forecast data and say when it was updated.">Weather in Ga-Sekororo</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Find official government job vacancies open to applicants in Limpopo. Include the official source and closing dates; do not guess if none can be verified.">Official Limpopo jobs</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Research recent official public notices or infrastructure and renovation updates affecting Sekororo, Metz, or nearby Tzaneen. Cite dated official sources and say if no current notice is available.">Local notices and projects</button>
+                <button class="starter-prompt" type="button" data-starter-prompt="Help me understand this topic clearly and give a practical example.">Explain anything</button>
               </div>
             </div>
           </div>
@@ -92,19 +93,28 @@
                   <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg>
                   <span id="imageModeLabel">Create image</span>
                 </button>
-                <button id="attachDocument" class="attach-button" type="button" aria-label="Attach study documents" title="Upload study material">
+                <button id="attachDocument" class="attach-button" type="button" aria-label="Attach documents" title="Upload files">
                   <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-8.9 8.9a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
-                  <span>Attach</span>
+                  <span>Attach files</span>
                 </button>
                 <div id="attachmentPreview" class="attachment-preview" hidden>
                   <span id="attachmentName" class="attachment-name"></span>
                 <button id="removeAttachment" class="remove-attachment" type="button" aria-label="Remove selected documents">Remove all</button>
                 </div>
                 <div id="moduleCodeControl" class="module-code-control" hidden>
-                  <label class="visually-hidden" for="moduleCode">Module code (optional)</label>
-                  <input id="moduleCode" type="text" placeholder="Module code (optional)" maxlength="30" autocomplete="off">
+                  <label class="visually-hidden" for="moduleCode">Topic or course (optional)</label>
+                  <input id="moduleCode" type="text" placeholder="Topic or course (optional)" maxlength="30" autocomplete="off">
                 </div>
               </div>
+              <label class="response-language-control" for="responseLanguage">Reply in
+                <select id="responseLanguage" name="responseLanguage">
+                  <option value="auto">My language</option>
+                  <option value="english">English</option>
+                  <option value="sepedi">Sepedi</option>
+                  <option value="xitsonga">Tsonga (itsonga)</option>
+                  <option value="tshivenda">Tshivenda (Venda)</option>
+                </select>
+              </label>
               <button id="sendButton" class="send-button" type="submit" aria-label="Send message"><span id="sendLabel">Send message</span><span aria-hidden="true">↑</span></button>
             </div>
           </form>

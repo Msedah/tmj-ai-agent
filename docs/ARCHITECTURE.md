@@ -1,22 +1,27 @@
 # TMJ AI Agent Architecture
 
-## Identity
-TMJ AI Agent is a general-purpose assistant with a focus on North-West University (NWU) students. Developer contact details are intentionally not displayed in the interface. If a user explicitly asks about the developer, creator, or why the app was built, the assistant shows the approved developer profile with a concise, professional summary of TJ Mailula's progressive-programming and practical-automation interests and the app's student-support purpose.
+## Product behavior
 
-## NWU source hierarchy
-1. Current public official NWU pages and documents discovered through NWU's live multisite search.
-2. Current student-provided module documents, clearly labeled as user uploads rather than official policy.
-3. Reputable academic sources or general academic knowledge when useful; distinguish this from NWU-specific evidence.
+TMJ AI Agent is a general-purpose assistant for everyday questions, learning, work, documents and practical problem-solving. For current local questions without another location, it uses Sekororo/Ga-Sekororo, Ga-Mamahlola, Metz/Moetladimo and the wider Limpopo area as context. It does not assume a user's precise location.
 
-NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. TMJ AI complements—not impersonates or replaces—official NWU systems. It does not scrape private eFundi courses or ask students for their NWU password.
+Developer details are intentionally hidden in ordinary product responses. If a user explicitly asks about the developer, creator or app purpose, the Worker returns the approved profile without spending an AI inference.
 
-## Retrieval
-The Worker runs NWU's public multisite search for normalized question keywords, checks public official results, and fetches relevant public pages and linked PDFs within size/time bounds. Current policy pages can expose newly published or revised PDFs without a manual database reindex. Supabase pgvector remains available for user-authorized uploads and separately indexed materials. Answers return structured source links so the interface, not the language model, renders citations.
+## Evidence and research
 
-Unsupported current NWU policy or module-specific claims must not be invented. The assistant answers general questions even when no NWU or document source is relevant. Date-sensitive questions receive the current UTC clock and South African local time at runtime; when no source verifies a current NWU-specific rule, it still gives useful guidance while making the unverified detail explicit and providing a link to NWU's live public search.
+The Worker uses Cloudflare Workers AI for chat and embeddings. Files are retrieved only from the active conversation. Public municipal, provincial, national-government and service pages are fetched on demand only for relevant civic questions. Requests use a bounded source allowlist, size/time limits and redirect revalidation. The user's question is not sent to those source websites as a search query. Citations show a fetch time separately from any date shown near an item; an archive, expired job or tender award is not proof of a current opportunity or active project.
+
+The `/community.html` page provides a curated official-source directory and dated local place records. Those records include the source, review date and caveat where a location, contact or current service status could not be confirmed.
+
+The Ga-Sekororo weather route retrieves Open-Meteo numerical model data for a representative GeoNames locality point. It is not a weather-station reading, device GPS location or official warning. The response reports provider-retrieval time and model-valid time. Follow SAWS for official severe-weather warnings. Open-Meteo's free tier is non-commercial; an eligible commercial plan or another provider is required before monetizing this feature.
+
+Reply-language selection supports Sepedi, Xitsonga/Tsonga and Tshivenda/Venda as best-effort machine translation, not certified translation.
 
 ## Authentication and privacy
-Supabase Auth handles email/password accounts. Supabase Postgres stores conversations/messages. Row Level Security ensures a user can only access their own data. Private conversation history and uploads stay hidden from signed-out users. Live source discovery sends only normalized question keywords to NWU's public search endpoint; users are advised not to include passwords or sensitive personal data.
 
-## AI boundary
-Cloudflare Workers AI provides chat and embeddings. Retrieved public pages and uploads are untrusted evidence and are never instructions. The assistant handles general user questions as well as NWU study support, and uses a trusted runtime clock for date-sensitive answers.
+Supabase Auth handles email/password accounts. Supabase Postgres stores conversations, messages and document metadata. Row-level security protects account data; conversation vector search returns only the signed-in user's uploads from the active conversation. Daily use accounting stores account identifiers, dates and counts, not message content.
+
+Retrieved public pages and uploads are untrusted evidence, never instructions. The Worker supplies a trusted runtime clock for date-sensitive answers. Public-page retrieval is bounded and uses fixed official URLs selected by topic rather than transmitting the user's question to those sites.
+
+## Hosting and assets
+
+The production site is deployed as a Cloudflare Worker with static assets from `public/`, D1 for daily usage and activity, Supabase for authentication/conversations, and Cloudflare Workers AI for chat, embeddings and image creation. The older Netlify fallback has been retired; Cloudflare is the supported deployment path.
