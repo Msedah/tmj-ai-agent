@@ -12,6 +12,7 @@ import worker, {
   extractDocumentText,
   formatCurrentDateContext,
   generateChatResponse,
+  generateImage,
   getDailyUsageStatus,
   getDeveloperIdentityReply,
   getDeveloperIdentityResponse,
@@ -31,9 +32,14 @@ import {
   calculateChatNeuronsMilli,
   DailyAiNeuronLimitError,
   DAILY_OWNER_NEURON_LIMIT_MILLI,
+  DAILY_USER_IMAGE_NEURON_LIMIT,
+  DAILY_USER_IMAGE_NEURON_LIMIT_MILLI,
+  DAILY_USER_STANDARD_NEURON_LIMIT_MILLI,
   DAILY_USER_SHARED_NEURON_LIMIT_MILLI,
   estimateChatNeuronsMilli,
   estimateEmbeddingNeuronsMilli,
+  IMAGE_NEURON_RESERVATION_MILLI,
+  actualImageNeuronsMilli,
   fingerprintUserId,
   reserveDailyAiNeurons,
   runMeteredAi,
@@ -207,11 +213,20 @@ test("default daily chat limit is 60 requests and allocations remain under the s
 
   const sharedNeuronsExhausted = await getDailyUsageStatus(mockUsageDatabase({
     user_chat_count: 0, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
-    global_chat_count: 0, user_active: 1, active_users_count: 1, shared_ai_neurons_milli: 9_000_000
+    global_chat_count: 0, user_active: 1, active_users_count: 1,
+    shared_ai_neurons_milli: 9_000_000, shared_standard_ai_neurons_milli: 8_000_000
   }), "active-user", now);
   assert.equal(sharedNeuronsExhausted.aiBudgetAvailable, false);
   assert.equal(sharedNeuronsExhausted.chatAllowed, false);
   assert.equal(sharedNeuronsExhausted.uploadAllowed, false);
+
+  const imageBudgetUsed = await getDailyUsageStatus(mockUsageDatabase({
+    user_chat_count: 0, user_chat_limit: null, user_upload_count: 0, user_upload_bytes: 0,
+    global_chat_count: 0, user_active: 1, active_users_count: 1,
+    shared_ai_neurons_milli: 1_000_000, shared_standard_ai_neurons_milli: 0
+  }), "active-user", now);
+  assert.equal(imageBudgetUsed.aiBudgetAvailable, true, "image-specific Neurons do not exhaust the 8,000-Neuron standard allocation");
+  assert.equal(imageBudgetUsed.chatAllowed, true);
 
   const testOwnerId = "synthetic-owner-test-id";
   const testOwnerFingerprint = await fingerprintUserId(testOwnerId);
@@ -252,17 +267,35 @@ test("daily Neuron reservations atomically separate the verified owner reserve f
   };
 
   assert.deepEqual(await reserveDailyAiNeurons(database, "student-id", 2500, now), { allowed: true, resetAt: null });
-  assert.deepEqual(calls[0].bindings, ["2026-10-01", "student-id", "shared", 2500, now.toISOString(), 1_000_000, 9_000_000]);
+  assert.deepEqual(calls[0].bindings, ["2026-10-01", "student-id", "shared", 2500, now.toISOString(), 1_000_000, 9_000_000, DAILY_USER_IMAGE_NEURON_LIMIT_MILLI, DAILY_USER_STANDARD_NEURON_LIMIT_MILLI]);
   assert.match(calls[0].sql, /SUM\(neurons_used_milli \+ neurons_reserved_milli\)/);
   assert.match(calls[0].sql, /budget_pool = 'shared'/);
 
   assert.deepEqual(await reserveDailyAiNeurons(database, "system:nwu-indexing", 1250, now, "owner"), { allowed: true, resetAt: null });
-  assert.deepEqual(calls[1].bindings.slice(1), ["system:nwu-indexing", "owner", 1250, now.toISOString(), 1_000_000, 9_000_000]);
+  assert.deepEqual(calls[1].bindings.slice(1), ["system:nwu-indexing", "owner", 1250, now.toISOString(), 1_000_000, 9_000_000, DAILY_USER_IMAGE_NEURON_LIMIT_MILLI, DAILY_USER_STANDARD_NEURON_LIMIT_MILLI]);
   assert.match(calls[1].sql, /budget_pool = 'owner'/);
 
   const denied = await reserveDailyAiNeurons({ prepare: () => ({ bind: () => ({ first: async () => null }) }) }, "student-id", 1, now);
   assert.equal(denied.allowed, false);
   assert.equal(denied.resetAt, "2026-10-02T00:00:00.000Z");
+});
+
+test("image Neuron reservations use a protected sub-pool and leave the standard shared pool capped at 8,000", async () => {
+  const now = new Date("2026-10-01T23:30:00.000Z");
+  let call;
+  const database = { prepare(sql) { return { bind(...bindings) { call = { sql, bindings }; return { first: async () => ({ user_id: bindings[1] }) }; } }; } };
+  assert.deepEqual(await reserveDailyAiNeurons(database, "student-id#image", IMAGE_NEURON_RESERVATION_MILLI, now), { allowed: true, resetAt: null });
+  assert.equal(call.bindings[1], "student-id#image");
+  assert.equal(call.bindings[5], DAILY_OWNER_NEURON_LIMIT_MILLI);
+  assert.equal(call.bindings[6], DAILY_USER_SHARED_NEURON_LIMIT_MILLI);
+  assert.equal(call.bindings[7], DAILY_USER_IMAGE_NEURON_LIMIT_MILLI);
+  assert.equal(call.bindings[8], DAILY_USER_STANDARD_NEURON_LIMIT_MILLI);
+  assert.match(call.sql, /user_id LIKE '%#image'/);
+  assert.match(call.sql, /user_id NOT LIKE '%#image'/);
+  assert.equal(DAILY_USER_IMAGE_NEURON_LIMIT, 1_000);
+  assert.equal(DAILY_USER_STANDARD_NEURON_LIMIT_MILLI, 8_000_000);
+  assert.equal(IMAGE_NEURON_RESERVATION_MILLI, 80_000);
+  assert.equal(actualImageNeuronsMilli({ image: "/9j/2Q==" }, IMAGE_NEURON_RESERVATION_MILLI), IMAGE_NEURON_RESERVATION_MILLI);
 });
 
 test("metered Workers AI settles reported chat tokens and never invokes AI when reservation fails", async () => {
@@ -299,6 +332,39 @@ test("metered Workers AI settles reported chat tokens and never invokes AI when 
   assert.equal(deniedAiCalls, 0, "budget denial happens before Cloudflare AI inference");
 });
 
+test("generateImage calls FLUX.1 Schnell with fixed low-step settings and meters the image ledger", async () => {
+  const calls = [];
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        calls.push({ sql, bindings });
+        return { first: async () => ({ user_id: bindings[1] }) };
+      } };
+    }
+  };
+  let aiCall;
+  const image = await generateImage("A quiet mountain lake at sunrise", {
+    USAGE_DB: database,
+    AI: { async run(model, input) { aiCall = { model, input }; return { image: "/9j/2Q==" }; } }
+  }, { userId: "student-id" });
+  assert.equal(image, "/9j/2Q==");
+  assert.deepEqual(aiCall, {
+    model: "@cf/black-forest-labs/flux-1-schnell",
+    input: { prompt: "A quiet mountain lake at sunrise", steps: 4 }
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].bindings[1], "student-id#image");
+  assert.equal(calls[0].bindings[2], "shared");
+  assert.equal(calls[0].bindings[3], IMAGE_NEURON_RESERVATION_MILLI);
+  assert.equal(calls[1].bindings[1], "student-id#image");
+  assert.equal(calls[1].bindings[2], IMAGE_NEURON_RESERVATION_MILLI);
+  assert.equal(calls[1].bindings[3], IMAGE_NEURON_RESERVATION_MILLI);
+  await assert.rejects(() => generateImage("invalid model output", {
+    USAGE_DB: database,
+    AI: { async run() { return { image: "not-base64" }; } }
+  }, { userId: "student-id" }), /invalid image response/);
+});
+
 test("a failed AI inference keeps its reservation held conservatively until daily reset", async () => {
   const calls = [];
   const database = {
@@ -325,7 +391,7 @@ test("health route reports service readiness without exposing values", async () 
   assert.deepEqual(await response.json(), {
     status: "ok",
     ready: false,
-    services: { ai: false, chat: false, documentIndexing: false, nwuIngestion: false, dailyUsage: false }
+    services: { ai: false, chat: false, documentIndexing: false, imageGeneration: false, nwuIngestion: false, dailyUsage: false }
   });
 });
 
@@ -341,7 +407,7 @@ test("health route distinguishes chat readiness from optional indexing configura
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: false,
-    services: { ai: true, chat: true, documentIndexing: false, nwuIngestion: false, dailyUsage: true }
+    services: { ai: true, chat: true, documentIndexing: false, imageGeneration: true, nwuIngestion: false, dailyUsage: true }
   });
   assert.doesNotMatch(payload, /private-project|private-anon-key/);
 });
@@ -357,7 +423,7 @@ test("health route marks configured AI, chat, indexing and NWU ingestion ready",
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: true,
-    services: { ai: true, chat: true, documentIndexing: true, nwuIngestion: true, dailyUsage: true }
+    services: { ai: true, chat: true, documentIndexing: true, imageGeneration: true, nwuIngestion: true, dailyUsage: true }
   });
   assert.doesNotMatch(payload, /private-project|private-anon-key|private-service-key|private-ingest-secret/);
 });
@@ -507,6 +573,233 @@ test("usage status requires authentication and returns eligibility without expos
     assert.ok(Number.isFinite(Date.parse(activity.bindings[2])));
     assert.equal(databaseCalls.some(call => /INSERT INTO daily_usage/.test(call.sql)), false,
       "a sign-in activity record does not consume one of the 10 quota-account slots");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("image API requires sign-in, meters one successful image, and hides the repeat allowance detail", async () => {
+  const originalFetch = globalThis.fetch;
+  const userId = "student-1";
+  const imageClaims = new Map();
+  const databaseCalls = [];
+  let aiCalls = 0;
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        return {
+          first: async () => {
+            databaseCalls.push({ method: "first", sql, bindings });
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = imageClaims.get(accountId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: accountId };
+            }
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [accountId, claimId, generatedAt] = bindings;
+              const current = imageClaims.get(accountId);
+              if (current?.claimId !== claimId) return null;
+              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: accountId };
+            }
+            if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
+            throw new Error(`Unexpected D1 first query: ${sql}`);
+          },
+          run: async () => {
+            databaseCalls.push({ method: "run", sql, bindings });
+            return { success: true };
+          }
+        };
+      } };
+    }
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: userId, email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`Unexpected auth request: ${request.method} ${url.href}`);
+  };
+  const env = {
+    AI: { async run(model, input) { aiCalls += 1; assert.equal(model, "@cf/black-forest-labs/flux-1-schnell"); assert.equal(input.steps, 4); return { image: "/9j/2Q==" }; } },
+    SUPABASE_URL: "https://test-project.supabase.co",
+    SUPABASE_ANON_KEY: "test-anon-key",
+    USAGE_DB: database
+  };
+  const createRequest = (authorization = "Bearer user-token") => new Request("https://example.test/api/generate-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(authorization ? { Authorization: authorization } : {}) },
+    body: JSON.stringify({ prompt: "A soft green landscape with a river" })
+  });
+  try {
+    const unauthorized = await worker.fetch(createRequest(""), env);
+    assert.equal(unauthorized.status, 401);
+    assert.equal(databaseCalls.length, 0, "unsigned requests do not touch the image ledger");
+
+    const generated = await worker.fetch(createRequest(), env);
+    const imagePayload = await generated.json();
+    assert.equal(generated.status, 200);
+    assert.equal(imagePayload.image, "/9j/2Q==");
+    assert.equal(imagePayload.contentType, "image/jpeg");
+    assert.equal(aiCalls, 1);
+    const imageLedgerInsert = databaseCalls.find(call => call.sql.includes("INSERT INTO daily_image_usage"));
+    assert.ok(imageLedgerInsert);
+    assert.match(imageLedgerInsert.sql, /ON CONFLICT \(usage_date, user_id\) DO NOTHING/);
+    assert.equal(imageLedgerInsert.bindings[0], new Date().toISOString().slice(0, 10), "the event is recorded for the day generation actually completed");
+    assert.equal(databaseCalls.find(call => call.sql.includes("INSERT INTO daily_ai_neuron_usage"))?.bindings[1], `${userId}#image`);
+    assert.ok(databaseCalls.some(call => call.sql.includes("UPDATE daily_image_account_state") && call.sql.includes("generated_at")));
+
+    const repeated = await worker.fetch(createRequest(), env);
+    const repeatedPayload = await repeated.json();
+    assert.equal(repeated.status, 429);
+    assert.equal(repeatedPayload.code, "IMAGE_DAILY_LIMIT_REACHED");
+    assert.equal(repeatedPayload.error, "Image generation is unavailable right now.");
+    assert.doesNotMatch(repeatedPayload.error, /per day|today|tomorrow|quota|limit/i);
+    assert.equal(aiCalls, 1, "duplicate requests are rejected before a second inference");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an image finishing across UTC midnight consumes the completion day and blocks another request that day", async () => {
+  const originalFetch = globalThis.fetch;
+  const OriginalDate = globalThis.Date;
+  let clock = new OriginalDate("2026-10-05T23:59:59.000Z");
+  class ControlledDate extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : [clock.getTime()])); }
+    static now() { return clock.getTime(); }
+  }
+  globalThis.Date = ControlledDate;
+  const accountState = new Map();
+  const imageEvents = [];
+  let aiCalls = 0;
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        return {
+          first: async () => {
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [userId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = accountState.get(userId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              accountState.set(userId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: userId };
+            }
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [userId, claimId, generatedAt] = bindings;
+              const current = accountState.get(userId);
+              if (current?.claimId !== claimId) return null;
+              accountState.set(userId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: userId };
+            }
+            if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
+            throw new Error(`Unexpected D1 query: ${sql}`);
+          },
+          run: async () => {
+            if (sql.includes("INSERT INTO daily_image_usage")) imageEvents.push(bindings);
+            if (sql.includes("UPDATE daily_image_account_state") && sql.includes("SET claim_id = NULL")) {
+              const current = accountState.get(bindings[0]);
+              if (current?.claimId === bindings[1]) accountState.set(bindings[0], { ...current, claimId: null, claimedAt: null });
+            }
+            return { success: true };
+          }
+        };
+      } };
+    }
+  };
+  globalThis.fetch = async input => {
+    const request = input instanceof Request ? input : new Request(input);
+    if (new URL(request.url).pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "midnight-user", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error("Unexpected auth request");
+  };
+  const env = {
+    AI: { async run() { aiCalls += 1; clock = new OriginalDate("2026-10-06T00:00:02.000Z"); return { image: "/9j/2Q==" }; } },
+    SUPABASE_URL: "https://test-project.supabase.co", SUPABASE_ANON_KEY: "test-anon-key", USAGE_DB: database
+  };
+  const request = () => new Request("https://example.test/api/generate-image", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+    body: JSON.stringify({ prompt: "A sunrise over a quiet lake" })
+  });
+  try {
+    const first = await worker.fetch(request(), env);
+    assert.equal(first.status, 200);
+    assert.equal(accountState.get("midnight-user").generatedAt, "2026-10-06T00:00:02.000Z");
+    assert.equal(imageEvents[0][0], "2026-10-06", "admin event reporting uses the actual completion day");
+    const second = await worker.fetch(request(), env);
+    assert.equal(second.status, 429);
+    assert.equal(aiCalls, 1, "the account-wide completion lock prevents another inference on the same completion day");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.Date = OriginalDate;
+  }
+});
+
+test("failed image inference releases its account claim so a later retry can succeed", async () => {
+  const originalFetch = globalThis.fetch;
+  const imageClaims = new Map();
+  let aiCalls = 0;
+  let claimReleases = 0;
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        return {
+          first: async () => {
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = imageClaims.get(accountId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: accountId };
+            }
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [accountId, claimId, generatedAt] = bindings;
+              const current = imageClaims.get(accountId);
+              if (current?.claimId !== claimId) return null;
+              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: accountId };
+            }
+            if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
+            throw new Error(`Unexpected D1 query: ${sql}`);
+          },
+          run: async () => {
+            if (sql.includes("UPDATE daily_image_account_state") && sql.includes("SET claim_id = NULL")) {
+              claimReleases += 1;
+              const current = imageClaims.get(bindings[0]);
+              if (current?.claimId === bindings[1]) imageClaims.set(bindings[0], { ...current, claimId: null, claimedAt: null });
+            }
+            return { success: true };
+          }
+        };
+      } };
+    }
+  };
+  globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    if (new URL(request.url).pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "student-2", email: "student2@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error("Unexpected auth request");
+  };
+  const env = {
+    AI: { async run() { aiCalls += 1; if (aiCalls === 1) throw new Error("temporary provider failure"); return { image: "/9j/2Q==" }; } },
+    SUPABASE_URL: "https://test-project.supabase.co", SUPABASE_ANON_KEY: "test-anon-key", USAGE_DB: database
+  };
+  const request = () => new Request("https://example.test/api/generate-image", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+    body: JSON.stringify({ prompt: "A quiet forest" })
+  });
+  try {
+    const first = await worker.fetch(request(), env);
+    assert.equal(first.status, 503);
+    assert.equal(claimReleases, 1);
+    const retry = await worker.fetch(request(), env);
+    assert.equal(retry.status, 200);
+    assert.equal(aiCalls, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

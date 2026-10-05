@@ -101,7 +101,7 @@ function renderUsers(users) {
     email.textContent = account.email || `Account ${String(account.userId).slice(0, 8)}`;
     const details = document.createElement("p");
     details.className = "admin-user-details";
-    details.textContent = `${account.chatCount} chat requests used · about ${formatNeurons(account.aiNeuronsUsed)} Neurons used / ${formatNeurons(account.aiNeuronsReserved)} held · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)} · last active ${formatActivityTimestamp(account.lastSeenAt)}`;
+    details.textContent = `${account.chatCount} chat requests used · ${Number(account.imageCount || 0)} images · about ${formatNeurons(account.aiNeuronsUsed)} Neurons used / ${formatNeurons(account.aiNeuronsReserved)} held · ${account.uploadCount} uploads · ${formatMiB(account.uploadBytes)} · last active ${formatActivityTimestamp(account.lastSeenAt)}`;
     identity.append(email, details);
 
     const ratio = document.createElement("strong");
@@ -163,6 +163,8 @@ function renderDashboard(data) {
   adminEl("sharedNeuronsCaption").textContent = `${formatNeurons(estimatedNeurons.sharedRemaining)} remaining of ${formatNeurons(estimatedNeurons.sharedLimit)} shared-user pool`;
   adminEl("ownerNeuronsValue").textContent = formatNeurons(estimatedNeurons.ownerCommitted);
   adminEl("ownerNeuronsCaption").textContent = `${formatNeurons(estimatedNeurons.ownerRemaining)} remaining of ${formatNeurons(estimatedNeurons.ownerLimit)} reserved for this account`;
+  adminEl("totalImagesValue").textContent = String(data.totalImages || 0);
+  adminEl("totalImagesCaption").textContent = "generated today · TMJ only";
   adminEl("uploadsValue").textContent = String(data.totalUploads);
   adminEl("uploadsCaption").textContent = formatMiB(data.totalUploadBytes);
   const day = new Date(`${data.utcDay}T00:00:00Z`);

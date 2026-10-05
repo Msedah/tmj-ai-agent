@@ -13,6 +13,7 @@ let usageUserId = null;
 let usageCheckVersion = 0;
 let usageRefreshTimer = null;
 let isSubmitting = false;
+let imageMode = false;
 
 const $ = (id) => document.getElementById(id);
 const authDialog = $("authDialog");
@@ -24,6 +25,7 @@ const chatForm = $("chatForm");
 const chatStatus = $("chatStatus");
 const uploadStatus = $("uploadStatus");
 const attachmentControls = $("attachmentControls");
+const imageModeToggle = $("imageModeToggle");
 const attachDocument = $("attachDocument");
 const documentFile = $("documentFile");
 const sendButton = $("sendButton");
@@ -134,6 +136,7 @@ function updateAuthUI() {
     historyToggle.setAttribute("aria-expanded", String(Boolean(session && historyVisible)));
   }
   if (attachmentControls) attachmentControls.hidden = !session;
+  if (!session) imageMode = false;
   if (!session) $("conversationList").replaceChildren();
   const nextUsageUserId = session?.user?.id || null;
   if (nextUsageUserId !== usageUserId) {
@@ -491,22 +494,31 @@ function updateComposerLabel() {
   const hasFile = Boolean(documentFile?.files?.length);
   const hasQuestion = Boolean($("prompt")?.value.trim());
   const label = $("sendLabel");
+  const imageModeActive = Boolean(imageMode && session);
   const chatBlocked = Boolean(session && (!dailyUsage || !dailyUsage.chatAllowed));
   const uploadBlocked = Boolean(session && (!dailyUsage || !dailyUsage.uploadAllowed));
   const usagePending = Boolean(session && !dailyUsage);
   const usageUnavailable = Boolean(session && dailyUsage?.unavailable);
   const blockedLabel = usageUnavailable ? "Access unavailable" : (usagePending ? "Checking access…" : "Limit reached");
   const blockedAriaLabel = usageUnavailable ? "Daily usage check unavailable" : (usagePending ? "Checking daily access" : "Daily message limit reached");
+  if ($("prompt")) $("prompt").placeholder = imageModeActive ? "Describe the image you want to create…" : "Message TMJ AI…";
+  const imageLabel = $("imageModeLabel");
+  if (imageLabel) imageLabel.textContent = imageModeActive ? "Image mode" : "Create image";
+  if (imageModeToggle) {
+    imageModeToggle.setAttribute("aria-pressed", String(imageModeActive));
+    imageModeToggle.setAttribute("aria-label", imageModeActive ? "Turn off image creation" : "Create an image");
+    imageModeToggle.disabled = !session || isSubmitting || hasFile;
+  }
   if (sendButton) {
-    sendButton.disabled = isSubmitting || (hasFile ? uploadBlocked || (hasQuestion && chatBlocked) : chatBlocked);
+    sendButton.disabled = isSubmitting || (imageModeActive ? !hasQuestion || hasFile : (hasFile ? uploadBlocked || (hasQuestion && chatBlocked) : chatBlocked));
     sendButton.setAttribute("aria-busy", String(isSubmitting));
   }
-  if (attachDocument) attachDocument.disabled = uploadBlocked;
-  if (documentFile) documentFile.disabled = uploadBlocked;
+  if (attachDocument) attachDocument.disabled = uploadBlocked || imageModeActive || isSubmitting;
+  if (documentFile) documentFile.disabled = uploadBlocked || imageModeActive || isSubmitting;
   if (label && !isSubmitting) {
-    label.textContent = hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & send" : "Upload") : "Send message"));
+    label.textContent = imageModeActive ? (hasQuestion ? "Generate image" : "Describe an image") : (hasFile && uploadBlocked ? "Upload limit reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedLabel : (hasFile ? (hasQuestion ? "Upload & send" : "Upload") : "Send message")));
   }
-  if (sendButton) sendButton.setAttribute("aria-label", hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload and send message" : "Upload selected study material") : "Send message")));
+  if (sendButton) sendButton.setAttribute("aria-label", imageModeActive ? "Generate image" : (hasFile && uploadBlocked ? "Daily upload allowance reached" : (chatBlocked && (!hasFile || hasQuestion) ? blockedAriaLabel : (hasFile ? (hasQuestion ? "Upload and send message" : "Upload selected study material") : "Send message"))));
 }
 
 $("attachDocument").addEventListener("click", () => {
@@ -515,6 +527,14 @@ $("attachDocument").addEventListener("click", () => {
     return;
   }
   documentFile.click();
+});
+
+imageModeToggle?.addEventListener("click", () => {
+  if (!session || isSubmitting || documentFile?.files?.length) return;
+  imageMode = !imageMode;
+  setStatus(chatStatus, "", "info");
+  updateComposerLabel();
+  $("prompt").focus();
 });
 
 documentFile.addEventListener("change", () => {
@@ -573,6 +593,69 @@ async function readJson(response) {
     return await response.json();
   } catch {
     return { error: `The server returned an unreadable response (${response.status}).` };
+  }
+}
+
+async function submitImageGeneration(prompt) {
+  if (!session) {
+    showAuthDialog("Sign in to create an image.");
+    return;
+  }
+  if (prompt.length > 1_500) {
+    setStatus(chatStatus, "Keep the image description under 1,500 characters.", "info");
+    return;
+  }
+  isSubmitting = true;
+  updateComposerLabel();
+  $("sendLabel").textContent = "Creating image…";
+  setStatus(chatStatus, "Creating your image…", "info");
+  const userMessage = addMessage("user", prompt);
+  const answer = addMessage("assistant", "Creating image…");
+  try {
+    const response = await fetch("/api/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ prompt })
+    });
+    const data = await readJson(response);
+    if (!response.ok) {
+      answer.textContent = "Image generation is unavailable right now.";
+      userMessage.setAttribute("data-request-failed", "true");
+      setStatus(chatStatus, "Image generation is unavailable right now. Please try again later.", "info");
+      return;
+    }
+    const image = typeof data.image === "string" ? data.image : "";
+    if (data.contentType !== "image/jpeg" || !image || image.length > 8_000_000 || image.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+      throw new Error("The generated image could not be displayed.");
+    }
+    const imageUrl = `data:image/jpeg;base64,${image}`;
+    const figure = document.createElement("figure");
+    figure.className = "generated-image";
+    const preview = document.createElement("img");
+    preview.src = imageUrl;
+    preview.alt = `Generated image for: ${prompt}`;
+    preview.loading = "lazy";
+    const download = document.createElement("a");
+    download.href = imageUrl;
+    download.download = "tmj-ai-generated-image.jpg";
+    download.textContent = "Download image";
+    download.setAttribute("aria-label", "Download generated image");
+    figure.appendChild(preview);
+    figure.appendChild(download);
+    answer.replaceChildren(figure);
+    answer.setAttribute("role", "group");
+    if ($("prompt").value.trim() === prompt) {
+      $("prompt").value = "";
+      resizePrompt();
+    }
+    setStatus(chatStatus, "", "success");
+  } catch (error) {
+    answer.textContent = "Image generation is unavailable right now.";
+    userMessage.setAttribute("data-request-failed", "true");
+    setStatus(chatStatus, error?.message || "Image generation is unavailable right now. Please try again later.", "error");
+  } finally {
+    isSubmitting = false;
+    updateComposerLabel();
   }
 }
 
@@ -766,6 +849,7 @@ authForm.addEventListener("submit", async (event) => {
 $("newChat").addEventListener("click", () => {
   setSidebarOpen(false);
   currentConversation = null;
+  imageMode = false;
   chatForm.reset();
   resizePrompt();
   clearAttachment();
@@ -787,22 +871,28 @@ chatForm.addEventListener("submit", async (event) => {
   const prompt = $("prompt").value.trim();
   const files = Array.from(documentFile.files || []);
   if (!prompt && !files.length) {
-    setStatus(chatStatus, "Enter a question or attach a document first.");
+    setStatus(chatStatus, imageMode ? "Describe the image you want to create." : "Enter a question or attach a document first.");
     $("prompt").focus();
     return;
   }
-  if (!dailyUsage) await refreshDailyUsage();
-  if (dailyUsage?.unavailable) {
-    setStatus(chatStatus, "Could not check today's usage. Please try again shortly.", "usage");
+  if (imageMode && files.length) {
+    setStatus(chatStatus, "Remove the attached documents to create an image.", "info");
     return;
   }
-  if (prompt && !dailyUsage?.chatAllowed) {
-    setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
-    return;
-  }
-  if (files.length && !dailyUsage.uploadAllowed) {
-    setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
-    return;
+  if (!imageMode) {
+    if (!dailyUsage) await refreshDailyUsage();
+    if (dailyUsage?.unavailable) {
+      setStatus(chatStatus, "Could not check today's usage. Please try again shortly.", "usage");
+      return;
+    }
+    if (prompt && !dailyUsage?.chatAllowed) {
+      setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+      return;
+    }
+    if (files.length && !dailyUsage.uploadAllowed) {
+      setStatus(uploadStatus, UPLOAD_LIMIT_MESSAGE, "limit");
+      return;
+    }
   }
   const tooLarge = files.find(file => file.size > MAX_UPLOAD_BYTES);
   if (tooLarge) {
@@ -816,6 +906,11 @@ chatForm.addEventListener("submit", async (event) => {
   }
   if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) {
     setStatus(uploadStatus, "This selection is too large to add at once. Try fewer or smaller files.");
+    return;
+  }
+
+  if (imageMode) {
+    await submitImageGeneration(prompt);
     return;
   }
 
@@ -1081,6 +1176,8 @@ async function loadConversation(id) {
     if (messageResult.error) throw messageResult.error;
     if (documentResult.error) throw documentResult.error;
     currentConversation = { id };
+    imageMode = false;
+    updateComposerLabel();
     $("messages").replaceChildren();
     const timeline = [
       ...(messageResult.data || []).map(item => ({ ...item, kind: "message" })),

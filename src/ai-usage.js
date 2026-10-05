@@ -1,8 +1,13 @@
 export const DAILY_USER_SHARED_NEURON_LIMIT = 9_000;
+export const DAILY_USER_IMAGE_NEURON_LIMIT = 1_000;
+export const DAILY_USER_STANDARD_NEURON_LIMIT = DAILY_USER_SHARED_NEURON_LIMIT - DAILY_USER_IMAGE_NEURON_LIMIT;
 export const DAILY_OWNER_NEURON_LIMIT = 1_000;
 export const NEURON_MILLI_SCALE = 1_000;
 export const DAILY_USER_SHARED_NEURON_LIMIT_MILLI = DAILY_USER_SHARED_NEURON_LIMIT * NEURON_MILLI_SCALE;
+export const DAILY_USER_IMAGE_NEURON_LIMIT_MILLI = DAILY_USER_IMAGE_NEURON_LIMIT * NEURON_MILLI_SCALE;
+export const DAILY_USER_STANDARD_NEURON_LIMIT_MILLI = DAILY_USER_STANDARD_NEURON_LIMIT * NEURON_MILLI_SCALE;
 export const DAILY_OWNER_NEURON_LIMIT_MILLI = DAILY_OWNER_NEURON_LIMIT * NEURON_MILLI_SCALE;
+export const IMAGE_NEURON_RESERVATION_MILLI = 80 * NEURON_MILLI_SCALE;
 
 // SHA-256 fingerprint of the owner Supabase UUID; the raw account identifier is not stored in public source.
 const OWNER_USER_ID_FINGERPRINT = "8892fe53f92c4a0afecf91e7108fed2009006022622c94e66d8927f1328c7b8e";
@@ -17,21 +22,35 @@ const CHAT_MAX_OUTPUT_TOKENS = 1_200;
 const RESERVE_DAILY_NEURONS_QUERY = `
   INSERT INTO daily_ai_neuron_usage (usage_date, user_id, budget_pool, neurons_used_milli, neurons_reserved_milli, updated_at)
   SELECT ?1, ?2, ?3, 0, ?4, ?5
-  WHERE CASE WHEN ?3 = 'owner'
-    THEN COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+  WHERE CASE
+    WHEN ?3 = 'owner' THEN COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
       FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) + ?4 <= ?6
+    WHEN ?2 LIKE '%#image' THEN
+      COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) + ?4 <= ?7
+      AND COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'shared' AND user_id LIKE '%#image'), 0) + ?4 <= ?8
     ELSE COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
-      FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) + ?4 <= ?7
+        FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) + ?4 <= ?7
+      AND COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = ?1 AND budget_pool = 'shared' AND user_id NOT LIKE '%#image'), 0) + ?4 <= ?9
   END
   ON CONFLICT (usage_date, user_id) DO UPDATE SET
     budget_pool = excluded.budget_pool,
     neurons_reserved_milli = daily_ai_neuron_usage.neurons_reserved_milli + excluded.neurons_reserved_milli,
     updated_at = excluded.updated_at
-  WHERE CASE WHEN excluded.budget_pool = 'owner'
-    THEN COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+  WHERE CASE
+    WHEN excluded.budget_pool = 'owner' THEN COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
       FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'owner'), 0) + excluded.neurons_reserved_milli <= ?6
+    WHEN excluded.user_id LIKE '%#image' THEN
+      COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'shared'), 0) + excluded.neurons_reserved_milli <= ?7
+      AND COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'shared' AND user_id LIKE '%#image'), 0) + excluded.neurons_reserved_milli <= ?8
     ELSE COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
-      FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'shared'), 0) + excluded.neurons_reserved_milli <= ?7
+        FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'shared'), 0) + excluded.neurons_reserved_milli <= ?7
+      AND COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli)
+        FROM daily_ai_neuron_usage WHERE usage_date = excluded.usage_date AND budget_pool = 'shared' AND user_id NOT LIKE '%#image'), 0) + excluded.neurons_reserved_milli <= ?9
   END
   RETURNING user_id
 `;
@@ -109,9 +128,10 @@ export async function reserveDailyAiNeurons(database, userId, requestedMilli, no
   if (!database || typeof database.prepare !== "function") throw new Error("Daily AI usage database is not configured.");
   if (!Number.isSafeInteger(requestedMilli) || requestedMilli < 1) throw new Error("A positive AI Neuron reservation is required.");
   const accountId = String(userId);
+  const ownerAccountId = accountId.endsWith("#image") ? accountId.slice(0, -6) : accountId;
   const budgetPool = poolOverride === "owner" || poolOverride === "shared"
     ? poolOverride
-    : await isOwnerAiBudgetUser(accountId) ? "owner" : "shared";
+    : await isOwnerAiBudgetUser(ownerAccountId) ? "owner" : "shared";
   const timestamp = new Date(now);
   const row = await database.prepare(RESERVE_DAILY_NEURONS_QUERY)
     .bind(
@@ -121,7 +141,9 @@ export async function reserveDailyAiNeurons(database, userId, requestedMilli, no
       requestedMilli,
       timestamp.toISOString(),
       DAILY_OWNER_NEURON_LIMIT_MILLI,
-      DAILY_USER_SHARED_NEURON_LIMIT_MILLI
+      DAILY_USER_SHARED_NEURON_LIMIT_MILLI,
+      DAILY_USER_IMAGE_NEURON_LIMIT_MILLI,
+      DAILY_USER_STANDARD_NEURON_LIMIT_MILLI
     )
     .first();
   return { allowed: Boolean(row), resetAt: row ? null : new Date(Date.UTC(timestamp.getUTCFullYear(), timestamp.getUTCMonth(), timestamp.getUTCDate() + 1)).toISOString() };
@@ -146,11 +168,12 @@ export class DailyAiNeuronLimitError extends Error {
   }
 }
 
-export async function runMeteredAi(model, input, env, userId, estimateMilli, getActualMilli, poolOverride = null) {
+export async function runMeteredAi(model, input, env, userId, estimateMilli, getActualMilli, poolOverride = null, usageKind = "standard") {
   let reservedMilli = null;
   const reservedAt = new Date();
+  const ledgerUserId = usageKind === "image" ? `${String(userId)}#image` : String(userId);
   if (userId) {
-    const reservation = await reserveDailyAiNeurons(env.USAGE_DB, userId, estimateMilli, reservedAt, poolOverride);
+    const reservation = await reserveDailyAiNeurons(env.USAGE_DB, ledgerUserId, estimateMilli, reservedAt, poolOverride);
     if (!reservation.allowed) throw new DailyAiNeuronLimitError();
     reservedMilli = estimateMilli;
   }
@@ -167,7 +190,7 @@ export async function runMeteredAi(model, input, env, userId, estimateMilli, get
     const reportedMilli = getActualMilli(result, reservedMilli);
     if (reportedMilli > reservedMilli) console.error("Workers AI usage exceeded its conservative reservation; account and future requests are being charged the reported usage.");
     // If this accounting write fails, keep the conservative reservation instead of releasing unaccounted usage.
-    try { await settleDailyAiNeurons(env.USAGE_DB, userId, reservedMilli, reportedMilli, reservedAt); }
+    try { await settleDailyAiNeurons(env.USAGE_DB, ledgerUserId, reservedMilli, reportedMilli, reservedAt); }
     catch { console.warn("Workers AI usage settlement failed; the conservative reservation remains held until daily reset."); }
   }
   return result;
@@ -179,4 +202,9 @@ export function actualChatNeuronsMilli(result, fallbackMilli) {
 
 export function actualEmbeddingNeuronsMilli(result, fallbackMilli) {
   return calculateActualEmbeddingNeuronsMilli(result, fallbackMilli);
+}
+
+export function actualImageNeuronsMilli(_result, fallbackMilli) {
+  // FLUX.1 Schnell does not return token usage. Keep the full conservative image reservation.
+  return fallbackMilli;
 }

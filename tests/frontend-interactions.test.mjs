@@ -23,6 +23,10 @@ test("document attachment is inside the message composer and developer contact i
   const composer = markup.match(/<form id="chatForm"[\s\S]*?<\/form>/)?.[0] || "";
   assert.match(composer, /id="documentFile"/);
   assert.match(composer, /id="attachDocument"/);
+  assert.match(composer, /id="imageModeToggle"/);
+  assert.match(composer, /Create image/);
+  assert.match(source, /fetch\("\/api\/generate-image"/);
+  assert.match(styles, /\.generated-image/);
   assert.match(composer, /id="sendButton"/);
   assert.ok(markup.indexOf('id="chatStatus"') < markup.indexOf('<form id="chatForm"'), "chat feedback appears above the composer");
   assert.ok(markup.indexOf('id="uploadStatus"') < markup.indexOf('<form id="chatForm"'), "upload feedback appears above the composer");
@@ -47,6 +51,8 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(aboutMarkup, /Deleting that conversation also deletes its uploads and indexed text/i);
   assert.match(aboutMarkup, /stay with the conversation where they were added/i);
   assert.match(aboutMarkup, /Cloudflare Workers AI/);
+  assert.match(aboutMarkup, /Image prompts are processed by Cloudflare Workers AI/);
+  assert.match(aboutMarkup, /not saved to TMJ conversation history/);
   assert.match(aboutMarkup, /daily usage counter linked to your account/i);
   assert.match(aboutMarkup, /not question text or an AI-points balance/i);
   assert.match(aboutMarkup, /00:00 UTC \(02:00 South African time\)/);
@@ -129,7 +135,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     "authDialog", "authButton", "authForm", "authSubmit", "authStatus", "authToggle",
     "authClose", "authEmail", "authPassword", "authTitle", "accountIdentity",
     "chatForm", "chatStatus", "uploadStatus", "prompt", "messages", "newChat",
-    "attachmentControls", "documentFile", "attachDocument", "attachmentPreview", "attachmentName",
+    "attachmentControls", "documentFile", "imageModeToggle", "imageModeLabel", "attachDocument", "attachmentPreview", "attachmentName",
     "removeAttachment", "moduleCodeControl", "moduleCode", "sendButton", "sendLabel",
     "historyPanel", "conversationList", "appStatus", "sidebarToggle", "sidebarOverlay", "sidebarCollapse", "historyToggle"
   ];
@@ -158,6 +164,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   let savedMessages = [];
   let savedDocuments = [];
   let indexedDocuments = 0;
+  let imageRequests = 0;
   let usageSnapshot = { chatAllowed: true, uploadAllowed: true };
   let rejectNextIndex = false;
   let failUsageCheck = false;
@@ -237,6 +244,11 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     if (url === "/api/usage") return failUsageCheck
       ? { ok: false, status: 503, json: async () => ({ error: "Could not check today's usage." }) }
       : { ok: true, status: 200, json: async () => ({ ...usageSnapshot }) };
+    if (url === "/api/generate-image") {
+      imageRequests += 1;
+      if (imageRequests > 1) return { ok: false, status: 429, json: async () => ({ error: "Image generation is unavailable right now.", code: "IMAGE_DAILY_LIMIT_REACHED" }) };
+      return { ok: true, status: 200, json: async () => ({ image: "/9j/2Q==", contentType: "image/jpeg" }) };
+    }
     if (url.startsWith("/api/conversations/")) {
       const id = url.slice("/api/conversations/".length);
       deleteRequests.push({ url, options });
@@ -410,6 +422,35 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.ok(elements.accountIdentity.textContent.length <= 25);
   assert.equal(elements.accountIdentity.title, "averyveryverylongemailaddress@example.com");
 
+  elements.prompt.value = "";
+  elements.prompt.listeners.get("input")[0]();
+  elements.imageModeToggle.listeners.get("click")[0]();
+  assert.equal(elements.imageModeToggle.getAttribute("aria-pressed"), "true");
+  assert.equal(elements.prompt.placeholder, "Describe the image you want to create…");
+  elements.prompt.value = "A soft green landscape with a river";
+  elements.prompt.listeners.get("input")[0]();
+  assert.equal(elements.sendLabel.textContent, "Generate image");
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(imageRequests, 1);
+  const generatedImageAnswer = elements.messages.children.at(-1);
+  assert.equal(generatedImageAnswer.className, "message assistant");
+  const generatedFigure = generatedImageAnswer.children[0];
+  assert.equal(generatedFigure.className, "generated-image");
+  assert.equal(generatedFigure.children[0].src, "data:image/jpeg;base64,/9j/2Q==");
+  assert.equal(generatedFigure.children[1].download, "tmj-ai-generated-image.jpg");
+  assert.equal(elements.prompt.value, "", "the image prompt clears only after successful generation");
+
+  elements.prompt.value = "Try to generate another image";
+  elements.prompt.listeners.get("input")[0]();
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(imageRequests, 2);
+  assert.match(elements.chatStatus.textContent, /Image generation is unavailable right now/i);
+  assert.doesNotMatch(elements.chatStatus.textContent, /per day|today|tomorrow|quota|limit/i,
+    "a repeated attempt is stopped without telling the user about the daily allowance");
+  elements.imageModeToggle.listeners.get("click")[0]();
+  assert.equal(elements.imageModeToggle.getAttribute("aria-pressed"), "false");
+  assert.equal(elements.prompt.placeholder, "Message TMJ AI…");
+
   elements.prompt.scrollHeight = 32;
   elements.prompt.value = "";
   elements.prompt.listeners.get("input")[0]();
@@ -575,6 +616,13 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.equal(elements.sendButton.disabled, true, "the UI fails closed when the quota service is unavailable");
   assert.equal(elements.sendLabel.textContent, "Access unavailable", "a service outage is not mislabeled as an exhausted limit");
   assert.match(elements.chatStatus.textContent, /Could not check today's usage/i);
+  elements.imageModeToggle.listeners.get("click")[0]();
+  elements.prompt.value = "A small cabin in a pine forest";
+  elements.prompt.listeners.get("input")[0]();
+  assert.equal(elements.sendButton.disabled, false, "image access uses its own backend ledger rather than the regular chat status check");
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(imageRequests, 3, "image mode reaches its independently checked endpoint during a chat-status outage");
+  elements.imageModeToggle.listeners.get("click")[0]();
   failUsageCheck = false;
   windowListeners.get("focus")[0]();
   await new Promise(resolve => setImmediate(resolve));
