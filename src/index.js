@@ -308,34 +308,56 @@ async function recordDailyUserActivity(database, userId, now = new Date()) {
   `).bind(utcUsageDay(now), String(userId), timestamp).run();
 }
 
+const DAILY_IMAGE_CLAIM_LEASE_MS = 15 * 60 * 1000;
+
 async function claimDailyImageUsage(database, userId, claimId, now = new Date()) {
   const timestamp = now.toISOString();
+  const staleClaimBefore = new Date(now.getTime() - DAILY_IMAGE_CLAIM_LEASE_MS).toISOString();
   const row = await database.prepare(`
-    INSERT INTO daily_image_usage (usage_date, user_id, claim_id, requested_at)
-    VALUES (?1, ?2, ?3, ?4)
-    ON CONFLICT (usage_date, user_id) DO NOTHING
+    INSERT INTO daily_image_account_state (user_id, claim_id, claimed_at, generated_at)
+    VALUES (?1, ?2, ?3, NULL)
+    ON CONFLICT (user_id) DO UPDATE SET
+      claim_id = excluded.claim_id,
+      claimed_at = excluded.claimed_at
+    WHERE (daily_image_account_state.generated_at IS NULL
+        OR substr(daily_image_account_state.generated_at, 1, 10) < ?4)
+      AND (daily_image_account_state.claim_id IS NULL
+        OR daily_image_account_state.claimed_at <= ?5)
     RETURNING user_id
-  `).bind(utcUsageDay(now), String(userId), String(claimId), timestamp).first();
+  `).bind(String(userId), String(claimId), timestamp, utcUsageDay(now), staleClaimBefore).first();
   return { allowed: Boolean(row), resetAt: row ? null : nextUtcResetAt(now) };
 }
 
-async function markDailyImageGenerated(database, userId, claimId, now = new Date()) {
-  return database.prepare(`
-    UPDATE daily_image_usage
-    SET generated_at = ?4
-    WHERE usage_date = ?1 AND user_id = ?2 AND claim_id = ?3 AND generated_at IS NULL
+async function markDailyImageGenerated(database, userId, claimId, requestedAt, generatedAt = new Date()) {
+  const timestamp = generatedAt.toISOString();
+  const row = await database.prepare(`
+    UPDATE daily_image_account_state
+    SET claim_id = NULL, claimed_at = NULL, generated_at = ?3
+    WHERE user_id = ?1 AND claim_id = ?2
     RETURNING user_id
-  `).bind(utcUsageDay(now), String(userId), String(claimId), now.toISOString()).first();
-}
-
-async function releaseDailyImageClaim(database, userId, claimId, now = new Date()) {
+  `).bind(String(userId), String(claimId), timestamp).first();
+  if (!row) throw new Error("Image-generation claim could not be completed.");
   try {
     await database.prepare(`
-      DELETE FROM daily_image_usage
-      WHERE usage_date = ?1 AND user_id = ?2 AND claim_id = ?3 AND generated_at IS NULL
-    `).bind(utcUsageDay(now), String(userId), String(claimId)).run();
+      INSERT INTO daily_image_usage (usage_date, user_id, claim_id, requested_at, generated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5)
+      ON CONFLICT (usage_date, user_id) DO NOTHING
+    `).bind(utcUsageDay(generatedAt), String(userId), String(claimId), requestedAt.toISOString(), timestamp).run();
   } catch {
-    // A failed claim release is fail-closed: this account can try again after the daily reset.
+    // The account-state row is authoritative for admin totals even if this optional daily event write fails.
+  }
+  return row;
+}
+
+async function releaseDailyImageClaim(database, userId, claimId) {
+  try {
+    await database.prepare(`
+      UPDATE daily_image_account_state
+      SET claim_id = NULL, claimed_at = NULL
+      WHERE user_id = ?1 AND claim_id = ?2
+    `).bind(String(userId), String(claimId)).run();
+  } catch {
+    // A failed release is fail-closed; a stale in-flight lock expires after its lease.
   }
 }
 
@@ -469,7 +491,8 @@ async function handleImageGeneration(request, env) {
   const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
   if (!prompt || prompt.length > 1_500) return json(400, { error: "Describe the image you want in 1,500 characters or fewer." });
 
-  const now = new Date();
+  const requestedAt = new Date();
+  const now = requestedAt;
   try { await recordDailyUserActivity(env.USAGE_DB, auth.user.id, now); } catch {
     // Presence logging is best-effort and must not block a generation request.
   }
@@ -489,11 +512,10 @@ async function handleImageGeneration(request, env) {
 
   try {
     const image = await generateImage(prompt, env, { userId: auth.user.id });
-    try { await markDailyImageGenerated(env.USAGE_DB, auth.user.id, claimId, now); }
-    catch { console.warn("Generated image succeeded, but its completion timestamp could not be saved."); }
+    await markDailyImageGenerated(env.USAGE_DB, auth.user.id, claimId, requestedAt, new Date());
     return json(200, { image, contentType: "image/jpeg" });
   } catch (error) {
-    await releaseDailyImageClaim(env.USAGE_DB, auth.user.id, claimId, now);
+    await releaseDailyImageClaim(env.USAGE_DB, auth.user.id, claimId);
     if (error instanceof DailyAiNeuronLimitError) {
       return json(429, {
         error: "Image generation is temporarily unavailable. Please try again later.",
@@ -560,12 +582,12 @@ async function handleAdminDashboard(request, env) {
                UNION
                SELECT user_id FROM daily_usage WHERE usage_date = ?1
                UNION
-               SELECT user_id FROM daily_image_usage WHERE usage_date = ?1
+        SELECT user_id FROM daily_image_account_state WHERE substr(generated_at, 1, 10) = ?1
              ) AS active_accounts) AS active_users,
              COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_chats,
              COALESCE((SELECT SUM(upload_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_uploads,
              COALESCE((SELECT SUM(upload_bytes) FROM daily_usage WHERE usage_date = ?1), 0) AS total_upload_bytes,
-             COALESCE((SELECT COUNT(*) FROM daily_image_usage WHERE usage_date = ?1 AND generated_at IS NOT NULL), 0) AS total_images,
+             COALESCE((SELECT COUNT(*) FROM daily_image_account_state WHERE substr(generated_at, 1, 10) = ?1), 0) AS total_images,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_committed_milli,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
@@ -592,9 +614,9 @@ async function handleAdminDashboard(request, env) {
             WHERE activity.activity_date = ?1 AND activity.user_id = usage.user_id
           )
         UNION ALL
-        SELECT image.user_id, image.requested_at AS first_seen_at, COALESCE(image.generated_at, image.requested_at) AS last_seen_at
-        FROM daily_image_usage AS image
-        WHERE image.usage_date = ?1
+        SELECT image.user_id, image.generated_at AS first_seen_at, image.generated_at AS last_seen_at
+        FROM daily_image_account_state AS image
+        WHERE substr(image.generated_at, 1, 10) = ?1
           AND NOT EXISTS (
             SELECT 1 FROM daily_user_activity AS activity
             WHERE activity.activity_date = ?1 AND activity.user_id = image.user_id
@@ -611,8 +633,8 @@ async function handleAdminDashboard(request, env) {
              COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit,
              COALESCE(ai_usage.neurons_used_milli, 0) AS ai_neurons_used_milli,
              COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli,
-             COALESCE((SELECT COUNT(*) FROM daily_image_usage AS image
-               WHERE image.usage_date = ?1 AND image.user_id = activity.user_id AND image.generated_at IS NOT NULL), 0) AS image_count
+             COALESCE((SELECT COUNT(*) FROM daily_image_account_state AS image
+               WHERE substr(image.generated_at, 1, 10) = ?1 AND image.user_id = activity.user_id), 0) AS image_count
       FROM active_accounts AS activity
       LEFT JOIN daily_usage AS usage
         ON usage.usage_date = ?1 AND usage.user_id = activity.user_id

@@ -16,7 +16,7 @@ test("D1 migration discovery is isolated from root-level Supabase migrations", (
   const usageDatabase = wranglerConfig.d1_databases.find(database => database.binding === "USAGE_DB");
   assert.equal(usageDatabase?.migrations_dir, "migrations/d1");
   const d1Migrations = readdirSync(new URL("../migrations/d1/", import.meta.url)).filter(name => name.endsWith(".sql")).sort();
-  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql", "0004_daily_ai_neuron_usage.sql", "0005_daily_user_activity.sql", "0006_daily_image_usage.sql"]);
+  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql", "0004_daily_ai_neuron_usage.sql", "0005_daily_user_activity.sql", "0006_daily_image_usage.sql", "0007_daily_image_account_state.sql"]);
   assert.ok(!d1Migrations.includes("0005_tmj_admin_users.sql"), "the PostgreSQL allowlist migration must never be sent to D1");
 });
 
@@ -212,9 +212,11 @@ test("admin dashboard unions signed-in and usage-only accounts while preserving 
     assert.equal(payload.users[2].chatCount, 8, "a usage-only row remains visible without an activity row");
     assert.equal(payload.users[2].dailyChatLimit, 45);
     assert.equal(payload.users[2].lastSeenAt, null, "legacy usage-only rows have no fabricated activity timestamp");
-    assert.match(database.calls[0].sql, /SELECT user_id FROM daily_user_activity[\s\S]*?UNION[\s\S]*?SELECT user_id FROM daily_usage/);
+    assert.match(database.calls[0].sql, /SELECT user_id FROM daily_user_activity[\s\S]*?UNION[\s\S]*?SELECT user_id FROM daily_usage[\s\S]*?UNION[\s\S]*?daily_image_account_state/);
+    assert.match(database.calls[0].sql, /COUNT\(\*\) FROM daily_image_account_state WHERE substr\(generated_at, 1, 10\) = \?1/);
     assert.match(database.calls[0].sql, /SUM\(chat_count\) FROM daily_usage/);
     assert.match(database.calls[1].sql, /WITH ai_account_usage AS[\s\S]*?active_accounts AS/);
+    assert.match(database.calls[1].sql, /FROM daily_image_account_state AS image[\s\S]*?substr\(image\.generated_at, 1, 10\) = \?1/);
     assert.match(database.calls[1].sql, /NOT EXISTS/);
     assert.match(database.calls[1].sql, /COALESCE\(activity\.last_seen_at, ''\) DESC/);
     assert.equal(database.calls[1].bindings[2], 100, "the activity list is not limited by the 10-account quota cap");

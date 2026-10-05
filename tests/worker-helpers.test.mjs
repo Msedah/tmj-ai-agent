@@ -590,18 +590,25 @@ test("image API requires sign-in, meters one successful image, and hides the rep
         return {
           first: async () => {
             databaseCalls.push({ method: "first", sql, bindings });
-            if (sql.includes("INSERT INTO daily_image_usage")) {
-              if (imageClaims.has(bindings[1])) return null;
-              imageClaims.set(bindings[1], bindings[2]);
-              return { user_id: bindings[1] };
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = imageClaims.get(accountId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: accountId };
             }
-            if (sql.includes("UPDATE daily_image_usage")) return { user_id: bindings[1] };
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [accountId, claimId, generatedAt] = bindings;
+              const current = imageClaims.get(accountId);
+              if (current?.claimId !== claimId) return null;
+              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: accountId };
+            }
             if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
             throw new Error(`Unexpected D1 first query: ${sql}`);
           },
           run: async () => {
             databaseCalls.push({ method: "run", sql, bindings });
-            if (sql.includes("DELETE FROM daily_image_usage")) imageClaims.delete(bindings[1]);
             return { success: true };
           }
         };
@@ -641,8 +648,9 @@ test("image API requires sign-in, meters one successful image, and hides the rep
     const imageLedgerInsert = databaseCalls.find(call => call.sql.includes("INSERT INTO daily_image_usage"));
     assert.ok(imageLedgerInsert);
     assert.match(imageLedgerInsert.sql, /ON CONFLICT \(usage_date, user_id\) DO NOTHING/);
+    assert.equal(imageLedgerInsert.bindings[0], new Date().toISOString().slice(0, 10), "the event is recorded for the day generation actually completed");
     assert.equal(databaseCalls.find(call => call.sql.includes("INSERT INTO daily_ai_neuron_usage"))?.bindings[1], `${userId}#image`);
-    assert.ok(databaseCalls.some(call => call.sql.includes("UPDATE daily_image_usage") && call.sql.includes("generated_at")));
+    assert.ok(databaseCalls.some(call => call.sql.includes("UPDATE daily_image_account_state") && call.sql.includes("generated_at")));
 
     const repeated = await worker.fetch(createRequest(), env);
     const repeatedPayload = await repeated.json();
@@ -656,6 +664,81 @@ test("image API requires sign-in, meters one successful image, and hides the rep
   }
 });
 
+test("an image finishing across UTC midnight consumes the completion day and blocks another request that day", async () => {
+  const originalFetch = globalThis.fetch;
+  const OriginalDate = globalThis.Date;
+  let clock = new OriginalDate("2026-10-05T23:59:59.000Z");
+  class ControlledDate extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : [clock.getTime()])); }
+    static now() { return clock.getTime(); }
+  }
+  globalThis.Date = ControlledDate;
+  const accountState = new Map();
+  const imageEvents = [];
+  let aiCalls = 0;
+  const database = {
+    prepare(sql) {
+      return { bind(...bindings) {
+        return {
+          first: async () => {
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [userId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = accountState.get(userId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              accountState.set(userId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: userId };
+            }
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [userId, claimId, generatedAt] = bindings;
+              const current = accountState.get(userId);
+              if (current?.claimId !== claimId) return null;
+              accountState.set(userId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: userId };
+            }
+            if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
+            throw new Error(`Unexpected D1 query: ${sql}`);
+          },
+          run: async () => {
+            if (sql.includes("INSERT INTO daily_image_usage")) imageEvents.push(bindings);
+            if (sql.includes("UPDATE daily_image_account_state") && sql.includes("SET claim_id = NULL")) {
+              const current = accountState.get(bindings[0]);
+              if (current?.claimId === bindings[1]) accountState.set(bindings[0], { ...current, claimId: null, claimedAt: null });
+            }
+            return { success: true };
+          }
+        };
+      } };
+    }
+  };
+  globalThis.fetch = async input => {
+    const request = input instanceof Request ? input : new Request(input);
+    if (new URL(request.url).pathname.endsWith("/auth/v1/user")) {
+      return new Response(JSON.stringify({ id: "midnight-user", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error("Unexpected auth request");
+  };
+  const env = {
+    AI: { async run() { aiCalls += 1; clock = new OriginalDate("2026-10-06T00:00:02.000Z"); return { image: "/9j/2Q==" }; } },
+    SUPABASE_URL: "https://test-project.supabase.co", SUPABASE_ANON_KEY: "test-anon-key", USAGE_DB: database
+  };
+  const request = () => new Request("https://example.test/api/generate-image", {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+    body: JSON.stringify({ prompt: "A sunrise over a quiet lake" })
+  });
+  try {
+    const first = await worker.fetch(request(), env);
+    assert.equal(first.status, 200);
+    assert.equal(accountState.get("midnight-user").generatedAt, "2026-10-06T00:00:02.000Z");
+    assert.equal(imageEvents[0][0], "2026-10-06", "admin event reporting uses the actual completion day");
+    const second = await worker.fetch(request(), env);
+    assert.equal(second.status, 429);
+    assert.equal(aiCalls, 1, "the account-wide completion lock prevents another inference on the same completion day");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.Date = OriginalDate;
+  }
+});
+
 test("failed image inference releases its account claim so a later retry can succeed", async () => {
   const originalFetch = globalThis.fetch;
   const imageClaims = new Map();
@@ -666,18 +749,28 @@ test("failed image inference releases its account claim so a later retry can suc
       return { bind(...bindings) {
         return {
           first: async () => {
-            if (sql.includes("INSERT INTO daily_image_usage")) {
-              if (imageClaims.has(bindings[1])) return null;
-              imageClaims.set(bindings[1], bindings[2]);
-              return { user_id: bindings[1] };
+            if (sql.includes("INSERT INTO daily_image_account_state")) {
+              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const previous = imageClaims.get(accountId);
+              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
+              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              return { user_id: accountId };
             }
-            if (sql.includes("UPDATE daily_image_usage") || sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
+            if (sql.includes("UPDATE daily_image_account_state")) {
+              const [accountId, claimId, generatedAt] = bindings;
+              const current = imageClaims.get(accountId);
+              if (current?.claimId !== claimId) return null;
+              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
+              return { user_id: accountId };
+            }
+            if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
             throw new Error(`Unexpected D1 query: ${sql}`);
           },
           run: async () => {
-            if (sql.includes("DELETE FROM daily_image_usage")) {
+            if (sql.includes("UPDATE daily_image_account_state") && sql.includes("SET claim_id = NULL")) {
               claimReleases += 1;
-              imageClaims.delete(bindings[1]);
+              const current = imageClaims.get(bindings[0]);
+              if (current?.claimId === bindings[1]) imageClaims.set(bindings[0], { ...current, claimId: null, claimedAt: null });
             }
             return { success: true };
           }
