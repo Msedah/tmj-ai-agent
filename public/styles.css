@@ -209,6 +209,9 @@ a { color: inherit; }
 .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .attachment-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .attach-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; color: #4f5d63; background: #fff; border: 1px solid #d9dfe2; border-radius: 9px; font-size: 0.8rem; font-weight: 650; cursor: pointer; }
+.image-mode-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; color: #31594e; background: #f0f7f3; border: 1px solid #cfe2d7; border-radius: 9px; font-size: 0.8rem; font-weight: 680; cursor: pointer; }
+.image-mode-button:hover, .image-mode-button[aria-pressed="true"] { color: #075d4d; background: #e2f1e8; border-color: #a9d1bc; }
+.image-mode-button:disabled { opacity: 0.55; cursor: not-allowed; }
 .attach-button:hover { color: var(--green-dark); background: #f3f8f5; border-color: #bdd5cc; }
 .attach-button:disabled { opacity: 0.55; cursor: not-allowed; }
 .attachment-preview { max-width: min(280px, 46vw); display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; color: #43535a; background: #f1f6f3; border: 1px solid #dce9e2; border-radius: 8px; font-size: 0.74rem; }
@@ -226,6 +229,11 @@ a { color: inherit; }
 .send-button:focus-visible { outline: 3px solid rgba(8, 122, 104, 0.24); outline-offset: 3px; }
 .send-button:disabled { box-shadow: none; }
 .send-button span:last-child { width: 23px; height: 23px; display: grid; place-items: center; color: var(--green-dark); background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); font-size: 1rem; font-weight: 800; }
+.generated-image { max-width: min(640px, 100%); margin: 0; padding: 8px; overflow: hidden; background: #fff; border: 1px solid #e0e8e3; border-radius: 14px; }
+.generated-image img { display: block; width: 100%; height: auto; border-radius: 9px; }
+.generated-image figcaption { margin: 8px 2px 0; color: #68766f; font-size: 0.76rem; }
+.generated-image a { display: inline-flex; min-height: 34px; align-items: center; margin: 7px 2px 0; padding: 6px 10px; color: var(--green-dark); background: #f0f7f3; border: 1px solid #d4e8dc; border-radius: 8px; font-size: 0.78rem; font-weight: 700; text-decoration: none; }
+.generated-image a:hover { background: #e3f1e9; }
 .composer-status-region { width: 100%; }
 .composer-status-region .status { padding: 0 6px; }
 .chat-status { padding: 0 6px; }
@@ -294,6 +302,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .composer-bottom { align-items: flex-end; gap: 6px; }
   .attachment-controls { gap: 5px; }
   .attachment-preview { max-width: 40vw; }
+  .image-mode-button { min-height: 34px; padding: 6px 8px; }
 }
 @media (max-width: 480px) {
   .study-pill { padding: 5px 8px; font-size: 0.67rem; }
@@ -303,6 +312,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
   .composer { gap: 5px; padding: 7px; border-radius: 15px; }
   .composer textarea { min-height: 32px; padding: 5px 7px; font-size: 0.92rem; }
   .attach-button { min-height: 34px; padding: 6px 8px; }
+  .image-mode-button { min-height: 34px; padding: 6px 7px; font-size: 0.73rem; }
   .about-page-shell { width: min(100% - 24px, 820px); padding-top: 32px; }
   .about-page-heading p { font-size: 0.92rem; }
   .about-page-card p { font-size: 0.84rem; }

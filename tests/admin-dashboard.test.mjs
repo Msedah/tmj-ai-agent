@@ -16,7 +16,7 @@ test("D1 migration discovery is isolated from root-level Supabase migrations", (
   const usageDatabase = wranglerConfig.d1_databases.find(database => database.binding === "USAGE_DB");
   assert.equal(usageDatabase?.migrations_dir, "migrations/d1");
   const d1Migrations = readdirSync(new URL("../migrations/d1/", import.meta.url)).filter(name => name.endsWith(".sql")).sort();
-  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql", "0004_daily_ai_neuron_usage.sql", "0005_daily_user_activity.sql"]);
+  assert.deepEqual(d1Migrations, ["0001_daily_usage.sql", "0002_upload_bytes.sql", "0003_daily_chat_allocations.sql", "0004_daily_ai_neuron_usage.sql", "0005_daily_user_activity.sql", "0006_daily_image_usage.sql"]);
   assert.ok(!d1Migrations.includes("0005_tmj_admin_users.sql"), "the PostgreSQL allowlist migration must never be sent to D1");
 });
 
@@ -71,7 +71,8 @@ function adminDatabase({ summary, users = [], onRun = () => {} } = {}) {
               active_users: users.length,
               total_chats: 15,
               total_uploads: 3,
-              total_upload_bytes: 38_328
+              total_upload_bytes: 38_328,
+              total_images: 0
             },
             all: async () => ({ results: users }),
             run: async () => { onRun(sql, bindings); return { success: true }; }
@@ -157,13 +158,13 @@ test("admin dashboard unions signed-in and usage-only accounts while preserving 
   globalThis.fetch = mock.fetch;
   const database = adminDatabase({
     summary: {
-      active_users: 3, total_chats: 15, total_uploads: 3, total_upload_bytes: 38_328,
+      active_users: 3, total_chats: 15, total_uploads: 3, total_upload_bytes: 38_328, total_images: 2,
       shared_ai_neurons_committed_milli: 1_250_000, owner_ai_neurons_committed_milli: 25_500
     },
     users: [{
       user_id: ACTIVE_USER_ID, first_seen_at: "2026-10-04T08:00:00.000Z", last_seen_at: "2026-10-04T09:00:00.000Z",
       chat_count: 7, upload_count: 3, upload_bytes: 38_328,
-      daily_chat_limit: 50, ai_neurons_used_milli: 45_000, ai_neurons_reserved_milli: 5_000
+      daily_chat_limit: 50, ai_neurons_used_milli: 45_000, ai_neurons_reserved_milli: 5_000, image_count: 1
     }, {
       user_id: "9bc49c73-c388-4299-8f0c-3c21aa20c8f1", first_seen_at: "2026-10-04T08:30:00.000Z", last_seen_at: "2026-10-04T08:30:00.000Z",
       chat_count: 0, upload_count: 0, upload_bytes: 0, daily_chat_limit: 60,
@@ -185,6 +186,7 @@ test("admin dashboard unions signed-in and usage-only accounts while preserving 
     assert.equal(payload.userListLimit, 100);
     assert.equal(payload.usersTruncated, false);
     assert.equal(payload.totalChats, 15);
+    assert.equal(payload.totalImages, 2);
     assert.equal(payload.sharedChatLimit, 350);
     assert.equal(payload.sharedChatsRemaining, 335);
     assert.equal(payload.defaultDailyChatLimit, 60);
@@ -204,6 +206,7 @@ test("admin dashboard unions signed-in and usage-only accounts while preserving 
     assert.equal(payload.users[0].chatsRemaining, 43);
     assert.equal(payload.users[0].aiNeuronsUsed, 45);
     assert.equal(payload.users[0].aiNeuronsReserved, 5);
+    assert.equal(payload.users[0].imageCount, 1);
     assert.equal(payload.users[1].chatCount, 0, "a signed-in account with no chat row is still listed");
     assert.equal(payload.users[1].dailyChatLimit, 60);
     assert.equal(payload.users[2].chatCount, 8, "a usage-only row remains visible without an activity row");
@@ -211,7 +214,7 @@ test("admin dashboard unions signed-in and usage-only accounts while preserving 
     assert.equal(payload.users[2].lastSeenAt, null, "legacy usage-only rows have no fabricated activity timestamp");
     assert.match(database.calls[0].sql, /SELECT user_id FROM daily_user_activity[\s\S]*?UNION[\s\S]*?SELECT user_id FROM daily_usage/);
     assert.match(database.calls[0].sql, /SUM\(chat_count\) FROM daily_usage/);
-    assert.match(database.calls[1].sql, /WITH active_accounts AS/);
+    assert.match(database.calls[1].sql, /WITH ai_account_usage AS[\s\S]*?active_accounts AS/);
     assert.match(database.calls[1].sql, /NOT EXISTS/);
     assert.match(database.calls[1].sql, /COALESCE\(activity\.last_seen_at, ''\) DESC/);
     assert.equal(database.calls[1].bindings[2], 100, "the activity list is not limited by the 10-account quota cap");
@@ -395,6 +398,7 @@ test("admin allocation page uses existing sign-in only and contains no hard-code
   assert.match(adminMarkup, /Neuron figures are TMJ-only estimates/);
   assert.match(adminMarkup, /sharedNeuronsValue/);
   assert.match(adminMarkup, /ownerNeuronsValue/);
+  assert.match(adminMarkup, /totalImagesValue/);
 });
 
 test("admin dashboard refreshes activity automatically and reflects saved limits after reload", async () => {
@@ -442,13 +446,13 @@ test("admin dashboard refreshes activity automatically and reflects saved limits
       const activeUsers = Math.min(dashboardReads, 2);
       const payload = {
         utcDay: "2026-10-04", resetsAt: "2026-10-05T00:00:00.000Z",
-        activeUsers, activeUserLimit: 10, userListLimit: 100, usersTruncated: false, totalChats: 0,
+        activeUsers, activeUserLimit: 10, userListLimit: 100, usersTruncated: false, totalChats: 0, totalImages: 0,
         sharedChatLimit: 350, sharedChatsRemaining: 350, defaultDailyChatLimit: 60,
         estimatedNeurons: { sharedCommitted: 0, sharedLimit: 9000, sharedRemaining: 9000, ownerCommitted: 0, ownerLimit: 1000, ownerRemaining: 1000 },
         totalUploads: 0, totalUploadBytes: 0,
         users: [{
           userId: ACTIVE_USER_ID, email: "student@example.com", chatCount: 0,
-          dailyChatLimit: savedLimit, chatsRemaining: savedLimit, aiNeuronsUsed: 0,
+          dailyChatLimit: savedLimit, chatsRemaining: savedLimit, aiNeuronsUsed: 0, imageCount: 1,
           aiNeuronsReserved: 0, uploadCount: 0, uploadBytes: 0,
           lastSeenAt: `2026-10-04T0${dashboardReads}:00:00.000Z`
         }, ...(activeUsers > 1 ? [{
@@ -476,6 +480,7 @@ test("admin dashboard refreshes activity automatically and reflects saved limits
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(dashboardReads, 1);
   assert.equal(getElement("activeUsersValue").textContent, "1");
+  assert.equal(getElement("totalImagesValue").textContent, "0");
   assert.match(getElement("activeUsersCaption").textContent, /active today/);
   assert.match(getElement("adminUserListCaption").textContent, /accounts active today/);
   assert.equal(typeof intervalCallback, "function");

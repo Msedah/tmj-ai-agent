@@ -5,11 +5,14 @@ import { fetchNwuPublicDocument, normalizePublicNwuUrl, searchNwuLiveSources } f
 import {
   actualChatNeuronsMilli,
   actualEmbeddingNeuronsMilli,
+  actualImageNeuronsMilli,
   DailyAiNeuronLimitError,
   DAILY_OWNER_NEURON_LIMIT,
+  DAILY_USER_IMAGE_NEURON_LIMIT,
   DAILY_USER_SHARED_NEURON_LIMIT,
   estimateChatNeuronsMilli,
   estimateEmbeddingNeuronsMilli,
+  IMAGE_NEURON_RESERVATION_MILLI,
   isOwnerAiBudgetUser,
   NEURON_MILLI_SCALE,
   runMeteredAi
@@ -196,6 +199,7 @@ export function shouldSearchNwuLiveSources(message = "", hasConversationUploads 
 
 const CHAT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const EMBEDDING_DIMENSIONS = 384;
 export const DAILY_CHAT_LIMIT = 60;
 export const GLOBAL_DAILY_CHAT_LIMIT = 350;
@@ -220,10 +224,12 @@ const DAILY_USAGE_STATUS_QUERY = `
     COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS global_chat_count,
     CASE WHEN EXISTS (SELECT 1 FROM daily_usage WHERE usage_date = ?1 AND user_id = ?2) THEN 1 ELSE 0 END AS user_active,
     (SELECT COUNT(*) FROM daily_usage WHERE usage_date = ?1) AS active_users_count,
-    COALESCE((SELECT neurons_used_milli + neurons_reserved_milli FROM daily_ai_neuron_usage
-      WHERE usage_date = ?1 AND user_id = ?2), 0) AS account_ai_neurons_milli,
+    COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+      WHERE usage_date = ?1 AND user_id IN (?2, ?2 || '#image')), 0) AS account_ai_neurons_milli,
     COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
       WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_milli,
+    COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
+      WHERE usage_date = ?1 AND budget_pool = 'shared' AND user_id NOT LIKE '%#image'), 0) AS shared_standard_ai_neurons_milli,
     COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
       WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) AS owner_ai_neurons_milli
 `;
@@ -276,8 +282,8 @@ export async function getDailyUsageStatus(database, userId, now = new Date(), ow
   const canJoinPilot = userActive || activeUsers < MAX_DAILY_USERS;
   const aiNeuronsUsed = accountIsOwner
     ? Number(row?.owner_ai_neurons_milli || 0)
-    : Number(row?.shared_ai_neurons_milli || 0);
-  const aiNeuronLimit = (accountIsOwner ? DAILY_OWNER_NEURON_LIMIT : DAILY_USER_SHARED_NEURON_LIMIT) * NEURON_MILLI_SCALE;
+    : Number(row?.shared_standard_ai_neurons_milli || 0);
+  const aiNeuronLimit = (accountIsOwner ? DAILY_OWNER_NEURON_LIMIT : DAILY_USER_SHARED_NEURON_LIMIT - DAILY_USER_IMAGE_NEURON_LIMIT) * NEURON_MILLI_SCALE;
   const aiBudgetAvailable = aiNeuronsUsed < aiNeuronLimit;
   const chatAllowed = canJoinPilot && userChats < userChatLimit && globalChats < GLOBAL_DAILY_CHAT_LIMIT && aiBudgetAvailable;
   const uploadAllowed = canJoinPilot && uploadBytesUsed < DAILY_UPLOAD_LIMIT && aiBudgetAvailable;
@@ -300,6 +306,37 @@ async function recordDailyUserActivity(database, userId, now = new Date()) {
     ON CONFLICT (activity_date, user_id) DO UPDATE SET
       last_seen_at = excluded.last_seen_at
   `).bind(utcUsageDay(now), String(userId), timestamp).run();
+}
+
+async function claimDailyImageUsage(database, userId, claimId, now = new Date()) {
+  const timestamp = now.toISOString();
+  const row = await database.prepare(`
+    INSERT INTO daily_image_usage (usage_date, user_id, claim_id, requested_at)
+    VALUES (?1, ?2, ?3, ?4)
+    ON CONFLICT (usage_date, user_id) DO NOTHING
+    RETURNING user_id
+  `).bind(utcUsageDay(now), String(userId), String(claimId), timestamp).first();
+  return { allowed: Boolean(row), resetAt: row ? null : nextUtcResetAt(now) };
+}
+
+async function markDailyImageGenerated(database, userId, claimId, now = new Date()) {
+  return database.prepare(`
+    UPDATE daily_image_usage
+    SET generated_at = ?4
+    WHERE usage_date = ?1 AND user_id = ?2 AND claim_id = ?3 AND generated_at IS NULL
+    RETURNING user_id
+  `).bind(utcUsageDay(now), String(userId), String(claimId), now.toISOString()).first();
+}
+
+async function releaseDailyImageClaim(database, userId, claimId, now = new Date()) {
+  try {
+    await database.prepare(`
+      DELETE FROM daily_image_usage
+      WHERE usage_date = ?1 AND user_id = ?2 AND claim_id = ?3 AND generated_at IS NULL
+    `).bind(utcUsageDay(now), String(userId), String(claimId)).run();
+  } catch {
+    // A failed claim release is fail-closed: this account can try again after the daily reset.
+  }
 }
 
 export async function consumeDailyUsage(database, userId, kind, now = new Date(), uploadBytes = 0) {
@@ -360,15 +397,17 @@ export default {
       const dailyUsageReady = Boolean(env.USAGE_DB && typeof env.USAGE_DB.prepare === "function");
       const chatReady = Boolean(supabaseReady && aiReady && dailyUsageReady);
       const indexingReady = Boolean(chatReady && env.SUPABASE_SERVICE_ROLE_KEY);
+      const imageGenerationReady = chatReady;
       const nwuIngestionReady = Boolean(env.NWU_INGEST_SECRET && aiReady && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
       return json(200, {
         status: "ok",
         ready: chatReady && indexingReady,
-        services: { ai: aiReady, chat: chatReady, documentIndexing: indexingReady, nwuIngestion: nwuIngestionReady, dailyUsage: dailyUsageReady }
+        services: { ai: aiReady, chat: chatReady, documentIndexing: indexingReady, imageGeneration: imageGenerationReady, nwuIngestion: nwuIngestionReady, dailyUsage: dailyUsageReady }
       });
     }
     if (url.pathname === "/api/usage") return handleUsageStatus(request, env);
     if (url.pathname === "/api/admin/dashboard") return handleAdminDashboard(request, env);
+    if (url.pathname === "/api/generate-image") return handleImageGeneration(request, env);
     const adminLimitMatch = url.pathname.match(/^\/api\/admin\/users\/([0-9a-f-]{36})\/chat-limit$/i);
     if (adminLimitMatch) return handleAdminChatLimit(request, env, adminLimitMatch[1]);
     if (url.pathname === "/api/chat") return handleChat(request, env);
@@ -413,6 +452,56 @@ async function handleUsageStatus(request, env) {
     });
   } catch {
     return json(503, { error: "Could not check today's usage. Please try again shortly.", code: "DAILY_USAGE_UNAVAILABLE" });
+  }
+}
+
+async function handleImageGeneration(request, env) {
+  if (request.method !== "POST") return json(405, { error: "Method not allowed" });
+  if (!env.AI || typeof env.AI.run !== "function" || !env.USAGE_DB || !env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    return json(503, { error: "Image generation is not configured." });
+  }
+  const auth = await authenticate(request, env);
+  if (auth.error) return auth.error;
+  const declaredLength = Number(request.headers.get("Content-Length") || 0);
+  if (declaredLength > 12_000) return json(413, { error: "The image description is too long." });
+  let body;
+  try { body = await request.json(); } catch { return json(400, { error: "Invalid JSON." }); }
+  const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt || prompt.length > 1_500) return json(400, { error: "Describe the image you want in 1,500 characters or fewer." });
+
+  const now = new Date();
+  try { await recordDailyUserActivity(env.USAGE_DB, auth.user.id, now); } catch {
+    // Presence logging is best-effort and must not block a generation request.
+  }
+  const claimId = crypto.randomUUID();
+  let claim;
+  try {
+    claim = await claimDailyImageUsage(env.USAGE_DB, auth.user.id, claimId, now);
+  } catch {
+    return json(503, { error: "Could not check image access. Please try again shortly.", code: "IMAGE_USAGE_UNAVAILABLE" });
+  }
+  if (!claim.allowed) {
+    return json(429, {
+      error: "Image generation is unavailable right now.",
+      code: "IMAGE_DAILY_LIMIT_REACHED"
+    });
+  }
+
+  try {
+    const image = await generateImage(prompt, env, { userId: auth.user.id });
+    try { await markDailyImageGenerated(env.USAGE_DB, auth.user.id, claimId, now); }
+    catch { console.warn("Generated image succeeded, but its completion timestamp could not be saved."); }
+    return json(200, { image, contentType: "image/jpeg" });
+  } catch (error) {
+    await releaseDailyImageClaim(env.USAGE_DB, auth.user.id, claimId, now);
+    if (error instanceof DailyAiNeuronLimitError) {
+      return json(429, {
+        error: "Image generation is temporarily unavailable. Please try again later.",
+        code: "DAILY_AI_NEURON_LIMIT_REACHED",
+        resetAt: nextUtcResetAt(now)
+      });
+    }
+    return json(503, { error: "Image generation is temporarily unavailable. Please try again shortly." });
   }
 }
 
@@ -470,17 +559,27 @@ async function handleAdminDashboard(request, env) {
                SELECT user_id FROM daily_user_activity WHERE activity_date = ?1
                UNION
                SELECT user_id FROM daily_usage WHERE usage_date = ?1
+               UNION
+               SELECT user_id FROM daily_image_usage WHERE usage_date = ?1
              ) AS active_accounts) AS active_users,
              COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_chats,
              COALESCE((SELECT SUM(upload_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_uploads,
              COALESCE((SELECT SUM(upload_bytes) FROM daily_usage WHERE usage_date = ?1), 0) AS total_upload_bytes,
+             COALESCE((SELECT COUNT(*) FROM daily_image_usage WHERE usage_date = ?1 AND generated_at IS NOT NULL), 0) AS total_images,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_committed_milli,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'owner'), 0) AS owner_ai_neurons_committed_milli
     `).bind(day).first();
     const result = await env.USAGE_DB.prepare(`
-      WITH active_accounts AS (
+      WITH ai_account_usage AS (
+        SELECT CASE WHEN user_id LIKE '%#image' THEN substr(user_id, 1, length(user_id) - 6) ELSE user_id END AS account_user_id,
+               SUM(neurons_used_milli) AS neurons_used_milli,
+               SUM(neurons_reserved_milli) AS neurons_reserved_milli
+        FROM daily_ai_neuron_usage
+        WHERE usage_date = ?1
+        GROUP BY 1
+      ), active_accounts AS (
         SELECT user_id, first_seen_at, last_seen_at
         FROM daily_user_activity
         WHERE activity_date = ?1
@@ -492,6 +591,18 @@ async function handleAdminDashboard(request, env) {
             SELECT 1 FROM daily_user_activity AS activity
             WHERE activity.activity_date = ?1 AND activity.user_id = usage.user_id
           )
+        UNION ALL
+        SELECT image.user_id, image.requested_at AS first_seen_at, COALESCE(image.generated_at, image.requested_at) AS last_seen_at
+        FROM daily_image_usage AS image
+        WHERE image.usage_date = ?1
+          AND NOT EXISTS (
+            SELECT 1 FROM daily_user_activity AS activity
+            WHERE activity.activity_date = ?1 AND activity.user_id = image.user_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM daily_usage AS usage
+            WHERE usage.usage_date = ?1 AND usage.user_id = image.user_id
+          )
       )
       SELECT activity.user_id, activity.first_seen_at, activity.last_seen_at,
              COALESCE(usage.chat_count, 0) AS chat_count,
@@ -499,13 +610,14 @@ async function handleAdminDashboard(request, env) {
              COALESCE(usage.upload_bytes, 0) AS upload_bytes,
              COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit,
              COALESCE(ai_usage.neurons_used_milli, 0) AS ai_neurons_used_milli,
-             COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli
+             COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli,
+             COALESCE((SELECT COUNT(*) FROM daily_image_usage AS image
+               WHERE image.usage_date = ?1 AND image.user_id = activity.user_id AND image.generated_at IS NOT NULL), 0) AS image_count
       FROM active_accounts AS activity
       LEFT JOIN daily_usage AS usage
         ON usage.usage_date = ?1 AND usage.user_id = activity.user_id
       LEFT JOIN daily_chat_allocations AS allocation ON allocation.user_id = activity.user_id
-      LEFT JOIN daily_ai_neuron_usage AS ai_usage
-        ON ai_usage.usage_date = ?1 AND ai_usage.user_id = activity.user_id
+      LEFT JOIN ai_account_usage AS ai_usage ON ai_usage.account_user_id = activity.user_id
       ORDER BY COALESCE(activity.last_seen_at, '') DESC, COALESCE(usage.chat_count, 0) DESC, COALESCE(usage.upload_bytes, 0) DESC
       LIMIT ?3
     `).bind(day, DAILY_CHAT_LIMIT, MAX_ADMIN_ACTIVITY_ROWS).all();
@@ -530,6 +642,7 @@ async function handleAdminDashboard(request, env) {
         chatsRemaining: Math.max(0, dailyChatLimit - chatCount),
         aiNeuronsUsed: Number(row.ai_neurons_used_milli || 0) / NEURON_MILLI_SCALE,
         aiNeuronsReserved: Number(row.ai_neurons_reserved_milli || 0) / NEURON_MILLI_SCALE,
+        imageCount: Number(row.image_count || 0),
         uploadCount: Number(row.upload_count || 0),
         uploadBytes: Number(row.upload_bytes || 0)
       };
@@ -547,6 +660,7 @@ async function handleAdminDashboard(request, env) {
       usersTruncated: activeUsers > users.length,
       users,
       totalChats,
+      totalImages: Number(summary?.total_images || 0),
       sharedChatLimit: GLOBAL_DAILY_CHAT_LIMIT,
       sharedChatsRemaining: Math.max(0, GLOBAL_DAILY_CHAT_LIMIT - totalChats),
       defaultDailyChatLimit: DAILY_CHAT_LIMIT,
@@ -560,7 +674,7 @@ async function handleAdminDashboard(request, env) {
       },
       totalUploads: Number(summary?.total_uploads || 0),
       totalUploadBytes: Number(summary?.total_upload_bytes || 0),
-      usageNote: "Neuron figures are TMJ-only estimates based on Workers AI token usage and published rates; embedding input usage is conservatively estimated. Other AI workloads on the Cloudflare account are not included; use Cloudflare's dashboard for account-wide billed usage."
+      usageNote: "Neuron figures are TMJ-only estimates based on Workers AI token usage and published rates; embedding input usage is conservatively estimated. Image requests reserve a fixed estimate from a protected 1,000-Neuron portion of the shared 9,000-Neuron pool. Other AI workloads on the Cloudflare account are not included; use Cloudflare's dashboard for account-wide billed usage."
     });
   } catch {
     return json(503, { error: "Could not load today's admin usage. Please try again shortly.", code: "ADMIN_USAGE_UNAVAILABLE" });
@@ -1068,6 +1182,26 @@ export async function generateChatResponse(messages, env, { userId } = {}) {
   const response = typeof result?.response === "string" ? result.response.trim() : "";
   if (!response) throw new Error("Cloudflare returned an empty response.");
   return response;
+}
+
+export async function generateImage(prompt, env, { userId } = {}) {
+  if (!env.AI || typeof env.AI.run !== "function") throw new Error("Cloudflare AI is not configured.");
+  const poolOverride = await isOwnerAiBudgetUser(userId) ? "owner" : "shared";
+  const result = await runMeteredAi(
+    IMAGE_MODEL,
+    { prompt, steps: 4 },
+    env,
+    userId,
+    IMAGE_NEURON_RESERVATION_MILLI,
+    actualImageNeuronsMilli,
+    poolOverride,
+    "image"
+  );
+  const image = typeof result?.image === "string" ? result.image.replace(/^data:image\/jpeg;base64,/i, "") : "";
+  if (!image || image.length > 8_000_000 || image.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+    throw new Error("Cloudflare returned an invalid image response.");
+  }
+  return image;
 }
 
 function chunkText(text, size, overlap) {
