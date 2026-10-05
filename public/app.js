@@ -26,6 +26,7 @@ const chatStatus = $("chatStatus");
 const uploadStatus = $("uploadStatus");
 const attachmentControls = $("attachmentControls");
 const imageModeToggle = $("imageModeToggle");
+const responseLanguage = $("responseLanguage");
 const attachDocument = $("attachDocument");
 const documentFile = $("documentFile");
 const sendButton = $("sendButton");
@@ -151,7 +152,7 @@ function updateAuthUI() {
 }
 
 function renderWelcome() {
-  $("messages").innerHTML = '<div class="welcome"><img class="welcome-mark" src="/tmj-mark.svg" alt=""><p class="eyebrow">YOUR NWU STUDY PARTNER</p><h2>What are you studying today?</h2><p>Ask a module question for a clear, structured explanation.</p><div class="starter-prompts" role="group" aria-label="Try a starter prompt"><button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult concept from my module in plain language and give one example.">Explain a concept</button><button class="starter-prompt" type="button" data-starter-prompt="Find the current NWU rule about academic integrity and summarize it with an official source.">Find an NWU rule</button><button class="starter-prompt" type="button" data-starter-prompt="Help me make a one-week study plan for my next test. Ask what subjects and dates you need.">Build a study plan</button><button class="starter-prompt" type="button" data-starter-prompt="Quiz me one question at a time on a topic I am studying. Start by asking me the topic.">Quiz me</button></div></div>';
+  $("messages").innerHTML = '<div class="welcome"><img class="welcome-mark" src="/tmj-mark.svg" alt=""><p class="eyebrow">GENERAL AI · LOCAL INFORMATION</p><h2>What can I help with today?</h2><p>Ask about anything, explore local information, get a weather forecast, or choose a reply language.</p><div class="starter-prompts" role="group" aria-label="Try a starter prompt"><button class="starter-prompt" type="button" data-starter-prompt="What is the latest weather forecast for Ga-Sekororo, Limpopo? Use current forecast data and say when it was updated.">Weather in Ga-Sekororo</button><button class="starter-prompt" type="button" data-starter-prompt="Find official government job vacancies open to applicants in Limpopo. Include the official source and closing dates; do not guess if none can be verified.">Official Limpopo jobs</button><button class="starter-prompt" type="button" data-starter-prompt="Research recent official public notices or infrastructure and renovation updates affecting Sekororo, Metz, or nearby Tzaneen. Cite dated official sources and say if no current notice is available.">Local notices and projects</button><button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult topic in plain language and give one practical example.">Explain anything</button></div></div>';
 }
 
 function safeHttpsUrl(value) {
@@ -164,9 +165,19 @@ function safeHttpsUrl(value) {
   }
 }
 
-function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
+function safeSourceDirectoryUrl(value) {
+  return String(value || "") === "/community.html" ? "/community.html" : safeHttpsUrl(value);
+}
+
+function formatSourceCheckedAt(value) {
+  const date = new Date(String(value || ""));
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function appendAssistantSources(answer, sources = [], searchUrl = "") {
   const validSources = Array.isArray(sources) ? sources.filter(source => source && source.name) : [];
-  const safeSearchUrl = safeHttpsUrl(nwuSearchUrl);
+  const safeSearchUrl = safeSourceDirectoryUrl(searchUrl);
   if (!validSources.length && !safeSearchUrl) return;
 
   const section = document.createElement("section");
@@ -193,8 +204,10 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
         item.textContent = String(source.name).slice(0, 180);
       }
       const details = [];
-      if (source.module) details.push(`Module ${String(source.module).slice(0, 40)}`);
-      if (source.date) details.push(`Listed by NWU ${String(source.date).slice(0, 40)}`);
+      if (source.module) details.push(`Topic ${String(source.module).slice(0, 40)}`);
+      if (source.date) details.push(`Date shown near item ${String(source.date).slice(0, 40)}`);
+      const checkedAt = formatSourceCheckedAt(source.checkedAt);
+      if (checkedAt) details.push(`Fetched by TMJ ${checkedAt} (South African time)`);
       if (details.length) {
         const meta = document.createElement("span");
         meta.className = "source-meta";
@@ -208,11 +221,11 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
 
   if (safeSearchUrl) {
     const more = document.createElement("a");
-    more.className = "nwu-search-link";
+    more.className = "official-sources-link";
     more.href = safeSearchUrl;
     more.target = "_blank";
     more.rel = "noopener noreferrer";
-    more.textContent = "Search NWU’s public website for more";
+    more.textContent = "Browse official and community sources";
     section.appendChild(more);
   }
   answer.appendChild(section);
@@ -220,7 +233,7 @@ function appendAssistantSources(answer, sources = [], nwuSearchUrl = "") {
 
 function normalizeDeveloperProfile(value) {
   if (!value || typeof value !== "object") return null;
-  const purpose = String(value.purpose || "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI support accessible for everyday questions and to support NWU students in understanding concepts and working with their own study materials. I hope to use AI and automation to make useful information and guidance easier to access.").trim();
+  const purpose = String(value.purpose || "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI, reliable public information and practical guidance easier to access, especially for people in Sekororo and communities across Limpopo.").trim();
   const name = String(value.name || "").trim();
   const fullName = String(value.fullName || "").trim();
   const initialsMeaning = String(value.initialsMeaning || "").trim();
@@ -403,7 +416,7 @@ function appendAnswerActions(answer, text) {
   answer.appendChild(actions);
 }
 
-function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfile = null) {
+function addMessage(role, text, sources = [], searchUrl = "", developerProfile = null) {
   const profile = role === "assistant"
     ? (normalizeDeveloperProfile(developerProfile) || parseDeveloperProfileReply(text))
     : null;
@@ -412,8 +425,8 @@ function addMessage(role, text, sources = [], nwuSearchUrl = "", developerProfil
   if (profile) appendDeveloperProfileCard(element, profile);
   else element.textContent = text;
   element.setAttribute("role", role === "assistant" ? "status" : "note");
-  if (role === "assistant" && !profile) appendAssistantSources(element, sources, nwuSearchUrl);
-  if (role === "assistant" && String(text).trim() !== "Searching academic material…") appendAnswerActions(element, text);
+  if (role === "assistant" && !profile) appendAssistantSources(element, sources, searchUrl);
+  if (role === "assistant" && String(text).trim() !== "Researching relevant information…") appendAnswerActions(element, text);
   $("messages").appendChild(element);
   $("messages").scrollTop = $("messages").scrollHeight;
   return element;
@@ -523,7 +536,7 @@ function updateComposerLabel() {
 
 $("attachDocument").addEventListener("click", () => {
   if (!session) {
-    showAuthDialog("Sign in to attach and index your module material.");
+    showAuthDialog("Sign in to attach and index your files.");
     return;
   }
   documentFile.click();
@@ -1002,21 +1015,25 @@ chatForm.addEventListener("submit", async (event) => {
         setStatus(uploadStatus, "", "success");
       }
       if (indexedCount && (!prompt || !dailyUsage?.chatAllowed)) {
-        addMessage("assistant", "Upload complete. Ask a question about your study material to get a response.");
+        addMessage("assistant", "Upload complete. Ask a question about the files in this chat.");
       }
       if (!prompt || !dailyUsage?.chatAllowed) return;
     }
 
     $("sendLabel").textContent = "Thinking…";
-    setStatus(chatStatus, "Looking in this chat’s uploads and other relevant sources…", "info");
+    setStatus(chatStatus, "Checking this chat’s files and relevant public information…", "info");
     const userMessage = addMessage("user", prompt);
-    const answer = addMessage("assistant", "Searching academic material…");
+    const answer = addMessage("assistant", "Researching relevant information…");
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ message: prompt, conversationId: currentConversation?.id || null })
+        body: JSON.stringify({
+          message: prompt,
+          conversationId: currentConversation?.id || null,
+          responseLanguage: responseLanguage?.value || "auto"
+        })
       });
       const data = await readJson(response);
       if (!response.ok) {
@@ -1045,7 +1062,7 @@ chatForm.addEventListener("submit", async (event) => {
       } else {
         answer.className = "message assistant";
         answer.textContent = data.reply || "No response was returned.";
-        appendAssistantSources(answer, data.sources, data.nwuSearchUrl);
+        appendAssistantSources(answer, data.sources, data.communitySearchUrl);
       }
       appendAnswerActions(answer, data.reply || "No response was returned.");
       if (data.conversationId) currentConversation = { id: data.conversationId };

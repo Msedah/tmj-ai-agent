@@ -24,7 +24,7 @@ create table if not exists public.documents (
   file_name text not null,
   storage_path text not null unique,
   module_code text,
-  source_type text not null default 'student_upload' check (source_type in ('student_upload','nwu_official','academic')),
+  source_type text not null default 'student_upload' check (source_type in ('student_upload','academic')),
   source_url text,
   created_at timestamptz not null default now()
 );
@@ -68,18 +68,12 @@ create policy "users manage own messages" on public.messages for all
 
 drop policy if exists "users manage own documents" on public.documents;
 create policy "users manage own documents" on public.documents for all
-  using (auth.uid() = user_id or source_type = 'nwu_official')
+  using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
 drop policy if exists "users read own chunks" on public.document_chunks;
 create policy "users read own chunks" on public.document_chunks for select
-  using (
-    auth.uid() = user_id
-    or exists (
-      select 1 from public.documents d
-      where d.id = document_chunks.document_id and d.source_type = 'nwu_official'
-    )
-  );
+  using (auth.uid() = user_id);
 
 grant select, insert, update on public.conversations to authenticated;
 grant select, insert on public.messages to authenticated;
@@ -119,39 +113,18 @@ returns table (
   source_url text
 )
 language sql stable as $$
-  with upload_matches as (
-    select c.id, c.document_id, c.content,
-           1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
-           d.file_name as source_name, d.module_code, d.source_type, d.source_url
-    from public.document_chunks c
-    join public.documents d on d.id = c.document_id
-    where c.user_id = auth.uid()
-      and d.user_id = auth.uid()
-      and d.source_type = 'student_upload'
-      and d.conversation_id = target_conversation_id
-      and c.embedding_cloudflare is not null
-    order by c.embedding_cloudflare <=> query_embedding
-    limit least(match_count, 8)
-  ),
-  official_matches as (
-    select c.id, c.document_id, c.content,
-           1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
-           d.file_name as source_name, d.module_code, d.source_type, d.source_url
-    from public.document_chunks c
-    join public.documents d on d.id = c.document_id
-    where d.source_type = 'nwu_official'
-      and c.embedding_cloudflare is not null
-    order by c.embedding_cloudflare <=> query_embedding
-    limit greatest(match_count - least(match_count, 8), 0)
-  ),
-  combined as (
-    select * from upload_matches
-    union all
-    select * from official_matches
-  )
-  select * from combined
-  order by case when source_type = 'student_upload' then 0 else 1 end, similarity desc
-  limit match_count;
+  select c.id, c.document_id, c.content,
+         1 - (c.embedding_cloudflare <=> query_embedding) as similarity,
+         d.file_name as source_name, d.module_code, d.source_type, d.source_url
+  from public.document_chunks c
+  join public.documents d on d.id = c.document_id
+  where c.user_id = auth.uid()
+    and d.user_id = auth.uid()
+    and d.source_type = 'student_upload'
+    and d.conversation_id = target_conversation_id
+    and c.embedding_cloudflare is not null
+  order by c.embedding_cloudflare <=> query_embedding
+  limit least(match_count, 8);
 $$;
 
 grant execute on function public.match_document_chunks_cloudflare(vector, integer, uuid) to authenticated, service_role;

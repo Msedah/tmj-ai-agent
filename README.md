@@ -1,54 +1,66 @@
 # TMJ AI Agent
 
-General-purpose AI assistant with a focus on North-West University (NWU) student support. The active deployment is a **Cloudflare Worker with static assets**, backed by Supabase Auth/Postgres/Storage and Cloudflare Workers AI.
+TMJ AI Agent is a general-purpose AI assistant with a community-information focus on Sekororo/Ga-Sekororo, Ga-Mamahlola, Metz/Moetladimo, Maruleng, Mopani District and wider Limpopo. It is an independent service—not a government, municipality, employer or weather authority.
 
 ## Features
 
 - Email/password authentication through Supabase Auth; email is the account label and is shortened in the sidebar when long.
 - User-scoped saved conversations and private document uploads.
-- PDF, DOCX, TXT, and Markdown text extraction.
-- General-purpose answers plus retrieval-augmented, conversation-scoped document support using Cloudflare Workers AI and Supabase pgvector.
-- Trusted runtime date/time context for current-date questions and date calculations; South African local time is the default unless a timezone is specified.
-- Optional ingestion of public NWU resources through a protected endpoint.
-- NWU-focused help that complements rather than replaces official university instructions; general questions are also in scope.
-- Responsive chat interface with keyboard focus states and accessible live status messages.
-- On-demand image creation through Cloudflare Workers AI, with a server-enforced per-account repeat limit and no prompt/image persistence in TMJ's database.
+- General-purpose AI chat, with conversation-scoped document retrieval and optional reply-language selection for Sepedi, Tsonga (itsonga) and Venda (Tshivenda). Machine translation is best-effort, not certified.
+- On-request public-source retrieval for relevant official vacancies, notices, municipal pages, services, tenders and public-works information. Results are linked and the fetch time is reported separately from dates shown near a listing.
+- Curated community directory with official-source links and a dated snapshot of verified local place names and contacts.
+- Ga-Sekororo forecast model snapshot from Open-Meteo, including provider retrieval time and model-valid time. It uses a representative locality point, not the device's GPS or a measurement at a named facility.
+- On-demand image creation through Cloudflare Workers AI.
+- Responsive chat interface and separate community, About and admin pages.
+- Android WebView wrappers are maintained separately from the Worker website; they load the production web application.
 
-NWU's eFundi platform remains the official learning management system for module resources, communication, and assessments. Do not scrape private eFundi courses or ask students for NWU passwords. Students should only upload material they are authorised to use.
+## Local names and information quality
+
+The location context distinguishes **Sekororo, Maruleng Local Municipality, Mopani District, Limpopo** from Tzaneen; it does not label Sekororo as part of Tzaneen municipality. Official records reviewed for this release use names including **Sekororo hospital**, **SEKORORO clinic**, and **Moetladimo Branch**. The reviewed Post Office source does not identify an official branch called “Metz Post Office.” **Mahlakung Shopping Centre** is the documented project name. The directory shows its source and a 5 October 2026 review date; contacts, addresses and operating status must be confirmed with the linked provider.
+
+Current official pages are fetched only when a user's question is relevant to current jobs, notices, projects or public services. The question itself is not added to outgoing source-site URLs or request parameters. Source pages can be undated, delayed or contain historical archives. The assistant must not describe an old advert, tender award or notice as current without checking its date and status. A citation's “fetched by TMJ” time is not the source's publication date.
+
+The weather endpoint uses Open-Meteo numerical forecast data for a representative GeoNames locality point. Model values are not a live station observation, and forecasts may be edge-cached for up to 15 minutes. Follow the South African Weather Service for official warnings. Open-Meteo's free tier is for non-commercial use; switch to an eligible commercial plan or another provider before monetizing this feature. Attribution and CC BY 4.0 links are shown in the UI.
 
 ## Architecture
 
 - Worker entry point: `src/index.js`
+- Community public-source registry and bounded retrieval: `src/community-sources.js`
+- Forecast provider adapter: `src/local-weather.js`
 - Static site assets: `public/`
 - Supabase schema and row-level security: `supabase/schema.sql`
 - Cloudflare config and Workers AI binding: `wrangler.jsonc`
 - CI: `.github/workflows/ci.yml`
-- Legacy Netlify Functions remain in `netlify/functions/`; they are not the active Cloudflare deployment path.
+- The older Netlify fallback has been retired; Cloudflare is the supported deployment path.
 
-The active Worker uses `@cf/meta/llama-3.2-3b-instruct` for chat and `@cf/baai/bge-small-en-v1.5` for embeddings. No OpenAI API key is used by the Cloudflare Worker. The vector search stores Cloudflare's 384-dimensional vectors separately in `embedding_cloudflare`; an older `embedding` column and its data, if present, are left untouched. Previously indexed documents need to be uploaded and indexed again before their content is searchable with Cloudflare embeddings.
+The active Worker uses `@cf/meta/llama-3.2-3b-instruct` for chat and `@cf/baai/bge-small-en-v1.5` for embeddings. No OpenAI API key is used by the Cloudflare Worker. The vector search stores Cloudflare's 384-dimensional vectors separately in `embedding_cloudflare`; an older `embedding` column and its data, if present, are left untouched.
 
 ## Required services and setup
 
-1. In the Supabase SQL Editor, run `supabase/schema.sql`. It creates the conversation, message, document, and chunk tables, the Cloudflare vector-search function, the private Storage bucket, and row-level security policies. The script is safe to rerun and preserves any pre-existing OpenAI embedding column/data. Existing installations must also run the next numbered Supabase migration under `migrations/` when a new migration is released.
-2. In Supabase **Authentication → Sign In / Providers**, keep **Allow new users to sign up** enabled and turn **Confirm email** off. Email and password remain required; no display-name field is collected. Turning off confirmation allows account creation/sign-in without proving control of the email address, so users should still use an address they own.
-3. Set the Worker values in **Cloudflare Dashboard → Workers & Pages → `tmj-ai-agent` → Settings → Variables and Secrets**. The Workers AI binding named `AI` is declared in `wrangler.jsonc`; it does not need an AI provider API key.
+1. In the Supabase SQL Editor, run `supabase/schema.sql`. It creates the conversation, message, document, and chunk tables, the Cloudflare vector-search function, the private Storage bucket and row-level security policies. The script is safe to rerun and preserves any pre-existing OpenAI embedding column/data. Apply later Supabase migrations under `migrations/` when released.
+2. In Supabase **Authentication → Sign In / Providers**, configure email/password sign-in as intended. Turning off email confirmation permits account creation without proving control of the address; users should use an address they own.
+3. Set Worker values in **Cloudflare Dashboard → Workers & Pages → `tmj-ai-agent` → Settings → Variables and Secrets**. The Workers AI binding named `AI` is declared in `wrangler.jsonc`; it does not need a separate AI provider API key.
 
 | Name | Required | Handling |
 | --- | --- | --- |
 | `SUPABASE_URL` | Yes | Supabase project URL; keep consistent with the public client config in `public/app.js`. |
-| `SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key; safe for browser use with correct RLS, but also required by the Worker for user-token validation. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes for document/NWU indexing and admin authorization | **Secret; server only. Never put this in browser code or commit it.** |
-| `NWU_INGEST_SECRET` | Only for `/api/index-nwu` | **Secret.** Use a long random value and send it only in the `x-tmj-ingest-secret` header. |
+| `SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key; safe for browser use with correct RLS, and used by the Worker for user-token validation. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes for document indexing and admin authorization | **Secret; server only. Never put this in browser code or commit it.** |
 
 ### TMJ ADMIN
 
-The separate, mobile-friendly admin page is available at `/admin` and in the TMJ ADMIN Android wrapper. It uses the existing TMJ email/password sign-in and does not offer account creation. Dashboard access is denied unless that Supabase Auth UUID is explicitly present in `public.tmj_admin_users`; the table has RLS enabled and service-role-only access. The migration `migrations/0005_tmj_admin_users.sql` intentionally grants no account automatically. Do not authorize an account by email or put an admin password in the app.
+The separate, mobile-friendly admin page is available at `/admin` and in the TMJ ADMIN Android wrapper. It uses TMJ email/password sign-in and does not offer account creation. Dashboard access is denied unless the Supabase Auth UUID is explicitly present in `public.tmj_admin_users`; the table has RLS enabled and service-role-only access. The migration `migrations/0005_tmj_admin_users.sql` intentionally grants no account automatically. Do not authorize an account by email or put an admin password in the app.
 
-The D1 binding uses `migrations/d1` as its dedicated migration directory; this keeps the root folder's mixed historical SQL—including PostgreSQL migrations—out of Wrangler's SQLite migration runner. The D1 directory contains the complete sequence for a new database: daily usage, upload-byte accounting, per-account chat allocations, a pseudonymous AI Neuron usage ledger, authenticated activity, image-generation event records, and an account-wide image-claim/success lock. The lock also prevents an inference that crosses UTC midnight from opening a second daily slot; image activity and admin totals are dated at successful completion. Use `npx wrangler d1 migrations list tmj-ai-agent-usage --remote` to inspect pending changes and `npx wrangler d1 migrations apply tmj-ai-agent-usage --remote` to apply them. Accounts without an explicit admin allocation—existing or new—receive 60 chat requests per UTC day; an authorized admin can set an active account's limit from 0 to 350. The existing 350 shared daily requests and 10 active-account pilot cap remain hard ceilings. Of the TMJ-managed daily AI budget, 9,000 estimated Neurons are shared by non-owner accounts and 1,000 are reserved for the allowlisted owner account. Inside the shared pool, 1,000 Neurons are separately reserved for image creation and 8,000 for chat/embeddings, without changing the total 9,000 ceiling. Image requests use a fixed four-step FLUX.1 Schnell call; because the image response does not report token counts, the Worker reserves and charges a conservative published-rate estimate. Chat calls settle using Workers AI-reported token counts; embedding charges are conservatively estimated from the model's input ceiling. These are TMJ-only estimates, not Cloudflare account-wide billed usage; other Workers AI workloads can consume the same account-level 10,000-Neuron free allocation, which resets at 00:00 UTC. The Cloudflare dashboard remains authoritative for total billed usage. Only an owner-confirmed Auth UUID should be inserted into `tmj_admin_users`.
+The D1 binding uses `migrations/d1` as its dedicated migration directory. It stores daily usage, upload-byte accounting, per-account chat allocations, a pseudonymous AI Neuron ledger, authenticated activity, image-generation event records, and the account-wide image-claim/success lock. The lock prevents an inference crossing UTC midnight from opening a second daily image slot; image usage and admin totals are dated at successful completion. Use `npx wrangler d1 migrations list tmj-ai-agent-usage --remote` to inspect pending changes and `npx wrangler d1 migrations apply tmj-ai-agent-usage --remote` to apply them.
 
-### Free-tier limits
+### Quotas and limits
 
-Cloudflare Workers AI currently includes **10,000 Neurons per day** on Free and Paid Workers plans. Neurons are not a fixed number of tokens or chats. TMJ applies its own 9,000/1,000 estimated split to its inference calls, but cannot reserve Neurons used by unrelated Workers or other Cloudflare account activity. If the account reaches its Cloudflare daily allocation, AI requests fail until reset; Paid-plan usage beyond the allocation can incur charges. Upload indexing also consumes the AI allowance, so the Worker caps a single document at 20 extracted chunks and one NWU page at 100 chunks. Check Cloudflare's [current pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) before increasing limits or changing models. Supabase and Cloudflare Worker limits also apply independently.
+- Default: **60 chats per account per UTC day**; global hard ceiling: **350 chats/day** and the existing **10-account pilot cap**.
+- Daily image allowance is enforced server-side per account, and image claims are race-protected across UTC midnight.
+- Of the TMJ-managed daily AI budget, **9,000 estimated Neurons** are shared for non-owner accounts and **1,000** are reserved for the allowlisted owner. Within the shared pool, 1,000 Neurons are separately reserved for image generation and 8,000 for chat/embeddings.
+- Chat calls settle using Workers AI-reported token counts; embeddings and image calls use conservative estimates. These are TMJ-only estimates, not Cloudflare account-wide billed usage. Other Cloudflare workloads can consume the same account-level 10,000-Neuron free allocation.
+- The Cloudflare Workers AI free allowance is 10,000 Neurons/day; Neurons are not a fixed number of tokens or chats. Requests can fail after the allowance is reached; Paid-plan overage may incur charges. Check Cloudflare's [current pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) before changing limits or models.
+- A single document upload is bounded to 40 MiB. Upload indexing consumes the same AI budget as other Worker inference.
 
 ## Local development and tests
 
@@ -70,37 +82,27 @@ npm test
 
 ## API routes
 
-- `GET /api/health` — reports readiness booleans only; never returns secret values. `ready` requires chat and document-indexing configuration. NWU ingestion is reported separately. Health does not consume an AI request or guarantee remaining daily quota.
-- `POST /api/chat` — authenticated user question or task, relevant evidence retrieval, and conversation persistence.
-- `POST /api/generate-image` — authenticated prompt-based image generation; D1 stores account/claim/completion timestamps, not the prompt or image bytes.
-- `GET /api/admin/dashboard` — daily aggregates and account activity, accessible only to the UUID-allowlisted owner with an exactly matching, verified email.
+- `GET /api/health` — reports readiness booleans and whether the community/weather routes are included. It does not probe upstream weather service availability or remaining daily quota.
+- `GET /api/community/sources` — read-only curated source directory and dated place records.
+- `GET /api/weather` — Ga-Sekororo Open-Meteo forecast snapshot; upstream response may be edge-cached for up to 15 minutes.
+- `POST /api/chat` — authenticated question or task, relevant conversation-specific evidence, optional official-source/forecast retrieval, and conversation persistence.
+- `POST /api/generate-image` — authenticated prompt-based image generation; D1 stores account/claim/completion timestamps, not prompt or image bytes.
+- `GET /api/admin/dashboard` — daily aggregates and account activity, accessible only to the UUID-allowlisted owner with the required exact verified email.
 - `PUT /api/admin/users/{id}/chat-limit` — admin-allowlisted daily account limit, bounded to 0–350 and audited by administrator ID.
-- `DELETE /api/conversations/{id}` — authenticated deletion of the signed-in user's conversation; related messages are removed by the database cascade.
+- `DELETE /api/conversations/{id}` — authenticated deletion of the signed-in user's conversation and related messages.
 - `POST /api/index-document` — authenticated indexing of an uploaded user document.
-- `POST /api/index-nwu` — protected ingestion for public NWU source pages; provide `x-tmj-ingest-secret`.
 
-Student uploads are associated with the conversation in which they were indexed. Reopening a recent conversation restores its document cards, and semantic retrieval can use that conversation's uploads only. Uploading while no chat is open creates a conversation; adding another file in the same session attaches it to that chat. Deleting a conversation removes its associated document records and private storage files.
+Student uploads stay associated with the conversation where they were indexed. Reopening a recent conversation restores its document cards, and retrieval can use that conversation's uploads only. Deleting a conversation removes its associated document records and private storage files.
 
-The admin dashboard unions authenticated sign-in activity with daily usage rows, so sign-ins without chats and existing usage-only rows remain visible. It refreshes every 30 seconds, lists up to 100 recent accounts, and keeps the active-account count separate from the 10-account chat-pilot cap. D1 activity stores only account UUIDs and first/last authenticated timestamps—not email addresses or message content; email is resolved only for the authorized admin view.
+The admin dashboard unions authenticated sign-in activity with daily usage rows, so sign-ins without chats and usage-only rows remain visible. D1 activity stores only account UUIDs and first/last authenticated timestamps—not email addresses or message content; email is resolved only for the authorized admin view.
 
 ## Deployment verification
 
 After applying the Supabase schema and setting Worker variables:
 
-1. Open `/api/health` and confirm `services.ai`, `services.chat`, and `services.documentIndexing` are `true`. Confirm `services.nwuIngestion` is `true` only if that optional secret is set.
-2. Create an account using a valid email and password; confirm it can sign in without an email-verification step.
-3. Sign out and sign in again; confirm the sidebar shows the shortened email and hides saved history while signed out.
-4. Start a new conversation and submit an academic question. Verify the response is saved and can be reopened.
-5. Upload a small PDF, DOCX, TXT, or MD file and confirm indexing succeeds.
-6. Test at desktop and mobile widths, and check the browser console for runtime errors.
-
-## Scope and privacy
-
-TMJ AI Agent is a general-purpose assistant that can help with everyday questions, dates, calculations, and study material, with a focus on NWU student support. For current NWU requirements, prioritize retrieved official NWU and student-provided material; never invent course requirements, citations, or policy. Verify consequential academic requirements against current NWU module instructions and lecturer guidance.
-
-
-## Live NWU knowledge search
-
-For each signed-in academic question, the Worker searches NWU's public multisite search using short topic keywords, follows relevant links on public NWU-owned HTTPS hosts, and reads relevant public pages and PDFs. Official results are cited as clickable links in the chat. NWU's public Academic Policies page and Library policy pages can expose newly published documents without manual reindexing. Private eFundi and staff-intranet pages are excluded; the app never asks for NWU login credentials. Users should not include passwords or sensitive personal information in questions because topic keywords are searched on NWU's public site.
-
-Supabase vector search remains in place for the user's own uploaded module material. Uploads are labeled as student material, not official NWU policy. When no NWU-specific evidence can be retrieved, the assistant can still explain general academic concepts, but it must not invent current NWU requirements. It provides the NWU public search link and asks users to verify policy or module instructions with NWU/lecturers.
+1. Open `/api/health`; confirm chat, AI and document-indexing services are ready. The community/weather booleans confirm route wiring only; the first real weather request is the upstream availability check.
+2. Open `/api/community/sources`; confirm the groups, official links and dated place records load.
+3. Open `/api/weather`; confirm provider data, `retrievedAt`, `validTime`, and the representative location point are present.
+4. Sign in and ask for a current local vacancy or public notice. Confirm citations open official domains, check times are separate from source dates, and expired/undated records are not described as open/current.
+5. Select Sepedi, Tsonga or Venda, ask a short test question, and check that names/dates remain intact; treat output as an unverified AI draft.
+6. Test document upload, image creation, and the chat interface at desktop and mobile widths; check the browser console for runtime errors.

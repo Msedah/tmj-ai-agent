@@ -23,8 +23,9 @@ import worker, {
   MAX_DOCUMENT_CHUNKS,
   nextUtcResetAt,
   normalizeExtractedText,
+  normalizeResponseLanguage,
+  responseLanguageInstruction,
   sanitizeAssistantReply,
-  shouldSearchNwuLiveSources,
   utcUsageDay
 } from "../src/index.js";
 import {
@@ -45,14 +46,8 @@ import {
   runMeteredAi,
   settleDailyAiNeurons
 } from "../src/ai-usage.js";
-import {
-  buildNwuSearchQuery,
-  extractPublicPdfLinks,
-  isPublicNwuUrl,
-  normalizePublicNwuUrl,
-  parseNwuSearchResults,
-  searchNwuLiveSources
-} from "../src/nwu-search.js";
+import { COMMUNITY_PLACE_RECORDS, COMMUNITY_SOURCE_DIRECTORY, normalizeCommunityUrl, searchCommunitySources, shouldSearchCommunitySources } from "../src/community-sources.js";
+import { buildWeatherForecastUrl, describeWeatherCode, fetchSekororoWeather, shouldFetchSekororoWeather, WEATHER_LOCATION } from "../src/local-weather.js";
 
 function mockUsageDatabase(firstResult) {
   return {
@@ -271,8 +266,8 @@ test("daily Neuron reservations atomically separate the verified owner reserve f
   assert.match(calls[0].sql, /SUM\(neurons_used_milli \+ neurons_reserved_milli\)/);
   assert.match(calls[0].sql, /budget_pool = 'shared'/);
 
-  assert.deepEqual(await reserveDailyAiNeurons(database, "system:nwu-indexing", 1250, now, "owner"), { allowed: true, resetAt: null });
-  assert.deepEqual(calls[1].bindings.slice(1), ["system:nwu-indexing", "owner", 1250, now.toISOString(), 1_000_000, 9_000_000, DAILY_USER_IMAGE_NEURON_LIMIT_MILLI, DAILY_USER_STANDARD_NEURON_LIMIT_MILLI]);
+  assert.deepEqual(await reserveDailyAiNeurons(database, "system:community-indexing", 1250, now, "owner"), { allowed: true, resetAt: null });
+  assert.deepEqual(calls[1].bindings.slice(1), ["system:community-indexing", "owner", 1250, now.toISOString(), 1_000_000, 9_000_000, DAILY_USER_IMAGE_NEURON_LIMIT_MILLI, DAILY_USER_STANDARD_NEURON_LIMIT_MILLI]);
   assert.match(calls[1].sql, /budget_pool = 'owner'/);
 
   const denied = await reserveDailyAiNeurons({ prepare: () => ({ bind: () => ({ first: async () => null }) }) }, "student-id", 1, now);
@@ -391,7 +386,7 @@ test("health route reports service readiness without exposing values", async () 
   assert.deepEqual(await response.json(), {
     status: "ok",
     ready: false,
-    services: { ai: false, chat: false, documentIndexing: false, imageGeneration: false, nwuIngestion: false, dailyUsage: false }
+    services: { ai: false, chat: false, documentIndexing: false, imageGeneration: false, communityResearch: true, localWeather: true, dailyUsage: false }
   });
 });
 
@@ -407,25 +402,25 @@ test("health route distinguishes chat readiness from optional indexing configura
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: false,
-    services: { ai: true, chat: true, documentIndexing: false, imageGeneration: true, nwuIngestion: false, dailyUsage: true }
+    services: { ai: true, chat: true, documentIndexing: false, imageGeneration: true, communityResearch: true, localWeather: true, dailyUsage: true }
   });
   assert.doesNotMatch(payload, /private-project|private-anon-key/);
 });
 
-test("health route marks configured AI, chat, indexing and NWU ingestion ready", async () => {
+test("health route marks configured AI, chat, indexing and community routes ready", async () => {
   const env = {
     AI: { run() {} }, SUPABASE_URL: "https://private-project.supabase.co",
     SUPABASE_ANON_KEY: "private-anon-key", SUPABASE_SERVICE_ROLE_KEY: "private-service-key",
-    NWU_INGEST_SECRET: "private-ingest-secret", USAGE_DB: { prepare() {} }
+    USAGE_DB: { prepare() {} }
   };
   const response = await worker.fetch(new Request("https://example.test/api/health"), env);
   const payload = await response.text();
   assert.deepEqual(JSON.parse(payload), {
     status: "ok",
     ready: true,
-    services: { ai: true, chat: true, documentIndexing: true, imageGeneration: true, nwuIngestion: true, dailyUsage: true }
+    services: { ai: true, chat: true, documentIndexing: true, imageGeneration: true, communityResearch: true, localWeather: true, dailyUsage: true }
   });
-  assert.doesNotMatch(payload, /private-project|private-anon-key|private-service-key|private-ingest-secret/);
+  assert.doesNotMatch(payload, /private-project|private-anon-key|private-service-key/);
 });
 
 test("health route rejects unsupported methods", async () => {
@@ -458,7 +453,7 @@ test("conversation deletion authenticates the owner and scopes service-role dele
     const url = new URL(request.url);
     calls.push({ url, request });
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/documents") && request.method === "GET") {
       return new Response(JSON.stringify([{ storage_path: "student-1/study/notes.pdf" }]), { headers: { "Content-Type": "application/json" } });
@@ -545,7 +540,7 @@ test("usage status requires authentication and returns eligibility without expos
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     throw new Error(`Unexpected request: ${request.method} ${url.href}`);
   };
@@ -619,7 +614,7 @@ test("image API requires sign-in, meters one successful image, and hides the rep
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: userId, email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: userId, email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     throw new Error(`Unexpected auth request: ${request.method} ${url.href}`);
   };
@@ -713,7 +708,7 @@ test("an image finishing across UTC midnight consumes the completion day and blo
   globalThis.fetch = async input => {
     const request = input instanceof Request ? input : new Request(input);
     if (new URL(request.url).pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "midnight-user", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "midnight-user", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     throw new Error("Unexpected auth request");
   };
@@ -781,7 +776,7 @@ test("failed image inference releases its account claim so a later retry can suc
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     if (new URL(request.url).pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-2", email: "student2@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-2", email: "student2@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     throw new Error("Unexpected auth request");
   };
@@ -814,7 +809,7 @@ test("chat cap is claimed atomically and rejected before retrieval or any AI cal
     const url = new URL(request.url);
     calls.push(url.pathname);
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     throw new Error(`Retrieval must not run after a quota denial: ${request.method} ${url.href}`);
   };
@@ -850,7 +845,7 @@ test("document indexing rejects an oversized file and excessive extracted text b
     globalThis.fetch = async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
-      if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@nwu.ac.za', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@example.org', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
       if (url.pathname.includes('/storage/v1/object/')) return new Response(contents, { headers: { 'Content-Type': 'text/plain' } });
       throw new Error(`Unexpected request: ${request.method} ${url.href}`);
     };
@@ -902,7 +897,7 @@ test('document indexing keeps upload bytes separate from chat and blocks only wh
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@nwu.ac.za', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
+    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@example.org', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
     if (url.pathname.includes('/storage/v1/object/')) { storageFetchCalls += 1; return new Response('A valid set of module notes with enough readable academic text.', { headers: { 'Content-Type': 'text/plain' } }); }
     throw new Error(`Unexpected request: ${request.method} ${url.href}`);
   };
@@ -953,7 +948,7 @@ test('sequential uploads accept real PDF and DOCX after chat points are exhauste
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@nwu.ac.za', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
+    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@example.org', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
     if (url.pathname.endsWith('/rest/v1/conversations') && request.method === 'POST') {
       conversationInsertCount += 1;
       return new Response(JSON.stringify({ id: createdConversationId }), { status: 201, headers: { 'Content-Type': 'application/json' } });
@@ -1039,7 +1034,7 @@ test('upload claim denial after preflight prevents embedding and returns the ref
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@nwu.ac.za', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
+    if (url.pathname.endsWith('/auth/v1/user')) return new Response(JSON.stringify({ id: 'student-1', email: 'student@example.org', aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }), { headers: { 'Content-Type': 'application/json' } });
     if (url.pathname.includes('/storage/v1/object/')) { storageFetchCalls += 1; return new Response(contents, { headers: { 'Content-Type': 'text/plain' } }); }
     throw new Error(`Unexpected request: ${request.method} ${url.href}`);
   };
@@ -1086,7 +1081,7 @@ test("failed document embeddings refund the atomic upload-byte claim", async () 
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.pathname.endsWith("/auth/v1/user")) return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+    if (url.pathname.endsWith("/auth/v1/user")) return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     if (url.pathname.includes("/storage/v1/object/")) return new Response(file);
     throw new Error(`No document should be registered after embedding fails: ${request.method} ${url.href}`);
   };
@@ -1165,73 +1160,146 @@ test("generateChatResponse uses the Workers AI chat model and extracts the respo
   assert.deepEqual(call.input.messages, messages);
 });
 
-test("live NWU search normalizes concise topic keywords and preserves AI as a useful term", () => {
-  assert.equal(buildNwuSearchQuery("Could you please explain the NWU academic integrity policy?"), "NWU academic integrity policy");
-  assert.equal(buildNwuSearchQuery("How does NWU handle AI use?"), "NWU handle AI");
-  assert.ok(buildNwuSearchQuery("academic policy ".repeat(40)).length <= 120);
+test("official community retrieval is limited to civic/service questions and correctly selects the local area", () => {
+  assert.equal(shouldSearchCommunitySources("Find current official municipal job vacancies in Sekororo, Limpopo."), true);
+  assert.equal(shouldSearchCommunitySources("What is happening with road renovations in Maruleng?"), true);
+  assert.equal(shouldSearchCommunitySources("Is Sekororo hospital open and what is its contact?"), true);
+  assert.equal(shouldSearchCommunitySources("What is the latest weather forecast in Ga-Sekororo?"), false, "weather is served by the forecast endpoint, not municipal page search");
+  assert.equal(shouldSearchCommunitySources("How do I make a weekly budget?"), false);
+  assert.equal(shouldSearchCommunitySources("Find current jobs in Cape Town."), false, "an explicit location outside the focus area is not silently substituted");
 });
 
-test("only public NWU HTTPS hosts are eligible and eFundi/external URLs are rejected", () => {
-  assert.equal(isPublicNwuUrl("https://www.nwu.ac.za/policy.pdf"), true);
-  assert.equal(isPublicNwuUrl("https://library.nwu.ac.za/research-policies"), true);
-  assert.equal(isPublicNwuUrl("http://www.nwu.ac.za/policy.pdf"), false);
-  assert.equal(isPublicNwuUrl("https://efundi.nwu.ac.za/portal"), false);
-  assert.equal(isPublicNwuUrl("https://intranet.nwu.ac.za/"), false);
-  assert.equal(isPublicNwuUrl("https://example.com/policy.pdf"), false);
-  assert.equal(normalizePublicNwuUrl("http://www.nwu.ac.za/policy.pdf"), "https://www.nwu.ac.za/policy.pdf");
-  assert.equal(normalizePublicNwuUrl("https://example.com/policy.pdf"), null);
-});
-
-test("NWU search result parser extracts only official titles, URLs, dates and snippets", () => {
-  const html = `
-    <div class="search-scr views-row">
-      <h3 class="search-h3"><a href="http://www.nwu.ac.za/governance-and-management/academic-policies">Academic Policies</a></h3>
-      <span class="date-src"><i>2026-08-21</i></span>
-      <span class="content">Current Academic Integrity Policy and rules.</span>
-    </div>
-    <div class="search-scr views-row">
-      <h3 class="search-h3"><a href="https://example.com/not-nwu">External</a></h3>
-      <span class="content">Not an NWU page.</span>
-    </div>`;
-  const results = parseNwuSearchResults(html);
-  assert.equal(results.length, 1);
-  assert.equal(results[0].name, "Academic Policies");
-  assert.equal(results[0].url, "https://www.nwu.ac.za/governance-and-management/academic-policies");
-  assert.equal(results[0].date, "2026-08-21");
-  assert.match(results[0].snippet, /Academic Integrity Policy/);
-});
-
-test("linked PDF discovery accepts current NWU documents but excludes non-NWU links", () => {
-  const html = `<p><a href="/documents/2026-senate-rules.pdf">Senate Rules on Academic Integrity</a> Section 5: Responsible and Ethical Use of Artificial Intelligence.</p>
-    <a href="https://example.com/private.pdf">External PDF</a><a href="https://efundi.nwu.ac.za/course.pdf">Private course</a>`;
-  const links = extractPublicPdfLinks(html, "https://www.nwu.ac.za/governance-and-management/academic-policies");
-  assert.equal(links.length, 1);
-  assert.equal(links[0].url, "https://www.nwu.ac.za/documents/2026-senate-rules.pdf");
-  assert.match(links[0].snippet, /Responsible and Ethical Use of Artificial Intelligence/);
-});
-
-test("live NWU search fetches and cites a current linked Senate Rules PDF", async () => {
-  const searchHtml = `<div class="search-scr views-row"><h3 class="search-h3"><a href="https://www.nwu.ac.za/governance-and-management/academic-policies">Academic Policies</a></h3><span class="date-src"><i>2026-09-30</i></span><span class="content">Senate Rules on Academic Integrity. Section 5 covers responsible and ethical AI use.</span></div>`;
-  const policyHtml = `<main><h1>Academic Policies</h1><p><a href="https://www.nwu.ac.za/documents/2025-academic-integrity.pdf">Academic Integrity Policy</a></p><p><a href="https://www.nwu.ac.za/documents/2026-senate-rules.pdf">Senate Rules on Academic Integrity</a> Section 5: Responsible and Ethical Use of Artificial Intelligence.</p></main>`;
+test("provincewide Limpopo jobs route to provincial indexes rather than only nearby municipal pages", async () => {
   const calls = [];
-  const fetcher = async (input) => {
-    const url = String(input);
-    calls.push(url);
-    if (url.includes("/multisite-search?")) return new Response(searchHtml, { headers: { "Content-Type": "text/html" } });
-    if (url.endsWith("/governance-and-management/academic-policies")) return new Response(policyHtml, { headers: { "Content-Type": "text/html" } });
-    if (url.endsWith("/documents/2026-senate-rules.pdf")) return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "application/pdf" } });
-    throw new Error(`Unexpected URL requested: ${url}`);
-  };
-  const result = await searchNwuLiveSources("NWU Senate Rules responsible ethical AI use", {
-    fetcher,
-    async pdfParser() { return { text: "2026 NWU Senate Rules. Section 5: Responsible and ethical use of Artificial Intelligence in teaching and learning." }; }
+  await searchCommunitySources("Official Limpopo jobs", {
+    fetcher: async input => {
+      calls.push(String(input));
+      return new Response("Unavailable", { status: 503, headers: { "Content-Type": "text/plain" } });
+    }
   });
-  assert.ok(calls.some(url => url.includes("/multisite-search?")));
-  assert.ok(calls.includes("https://www.nwu.ac.za/documents/2026-senate-rules.pdf"));
-  const document = result.sources.find(source => source.url.endsWith("2026-senate-rules.pdf"));
-  assert.ok(document, "the current rules PDF is returned as a clickable citation");
-  assert.match(document.content, /Responsible and ethical use of Artificial Intelligence/);
-  assert.equal(document.type, "nwu_official_live");
+  assert.ok(calls.includes("https://www.limpopo.gov.za/?page_id=3454"));
+  assert.ok(calls.includes("https://erecruitment.limpopo.gov.za/browse"));
+  assert.ok(calls.includes("https://www.dpsa.gov.za/newsroom/psvc/"));
+  assert.ok(calls.includes("https://www.gov.za/government-jobs-week"));
+  assert.ok(!calls.some(url => url.includes("maruleng.gov.za") || url.includes("greatertzaneen.gov.za") || url.includes("mopani.gov.za")));
+});
+
+test("official-source lookup stops within one end-to-end deadline", async () => {
+  let calls = 0;
+  const startedAt = Date.now();
+  const result = await searchCommunitySources("Find current vacancies in Sekororo", {
+    budgetMs: 30,
+    fetcher: async (_input, { signal }) => new Promise((_resolve, reject) => {
+      calls += 1;
+      signal.addEventListener("abort", () => reject(new DOMException("Timed out", "AbortError")), { once: true });
+    })
+  });
+  assert.ok(calls > 0);
+  assert.deepEqual(result.sources, []);
+  assert.ok(Date.now() - startedAt < 250, "all parallel fetches share the bounded end-to-end budget");
+});
+
+test("community URL allowlist accepts official Maruleng pages and rejects insecure or unrelated hosts", () => {
+  assert.equal(normalizeCommunityUrl("https://www.maruleng.gov.za/pages/vacancies.php"), "https://www.maruleng.gov.za/pages/vacancies.php");
+  assert.equal(normalizeCommunityUrl("https://www.gov.za/about-government/government-jobs"), "https://www.gov.za/about-government/government-jobs");
+  assert.equal(normalizeCommunityUrl("https://erecruitment.limpopo.gov.za/browse?office=HEALTH"), "https://erecruitment.limpopo.gov.za/browse?office=HEALTH");
+  assert.equal(normalizeCommunityUrl("http://www.maruleng.gov.za/pages/vacancies.php"), null);
+  assert.equal(normalizeCommunityUrl("https://maruleng.gov.za.evil.example/"), null);
+  assert.equal(normalizeCommunityUrl("https://example.com/document.pdf"), null);
+  assert.equal(normalizeCommunityUrl("https://user:pass@www.maruleng.gov.za/"), null);
+});
+
+test("community retrieval returns dated official Maruleng content without sending the question to source URLs", async () => {
+  const sensitivePhrase = "secrets-not-to-be-forwarded";
+  const calls = [];
+  const fetcher = async input => {
+    const url = new URL(String(input));
+    calls.push(url.href);
+    if (url.hostname === "www.maruleng.gov.za" && url.pathname.endsWith("/pages/vacancies.php")) {
+      return new Response("<html><title>Vacancies</title><main><h1>External Vacancies</h1><p>ADVERT TRAINEE TRAFFIC OFFICERS X5 AND FOREMAN LOCAL AUG 2026. Date uploaded: 2026-09-17. Closing date: 2026-10-07. Apply only as instructed in the linked official advert.</p></main></html>", { headers: { "Content-Type": "text/html" } });
+    }
+    return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain" } });
+  };
+  const result = await searchCommunitySources(`Find current official job vacancies in Sekororo, Limpopo ${sensitivePhrase}`, { fetcher });
+  const vacancy = result.sources.find(source => source.url === "https://www.maruleng.gov.za/pages/vacancies.php");
+  assert.ok(vacancy);
+  assert.match(vacancy.content, /Trainee Traffic Officers/i);
+  assert.match(vacancy.content, /2026-10-07/);
+  assert.equal(vacancy.type, "official_public");
+  assert.equal(vacancy.checkedAt, result.checkedAt);
+  assert.ok(Number.isFinite(Date.parse(result.checkedAt)));
+  assert.ok(calls.every(url => !url.includes(sensitivePhrase)), "the user's question is not added to outgoing URLs");
+  assert.ok(calls.includes("https://www.maruleng.gov.za/pages/vacancies.php"));
+});
+
+test("local health-job research opens the official provincial department listing and preserves its stated location", async () => {
+  const calls = [];
+  const navigation = `<section>${"Limpopo health department nurse vacancies. ".repeat(80)}</section>`;
+  const listing = `<html>${navigation}<main><h1>Available Positions</h1><article><h2>Professional Nurse</h2><p>Location: Polokwane</p><p>Reference No: LDOH-2026-101</p><p>Closing Date: 30 October 2026</p></article></main></html>`;
+  const result = await searchCommunitySources("Find current nurse vacancies in Sekororo, Limpopo", {
+    fetcher: async input => {
+      const url = new URL(String(input));
+      calls.push(url.href);
+      return url.hostname === "erecruitment.limpopo.gov.za" && url.searchParams.get("office") === "HEALTH"
+        ? new Response(listing, { headers: { "Content-Type": "text/html" } })
+        : new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain" } });
+    }
+  });
+  const healthListing = result.sources.find(source => source.url === "https://erecruitment.limpopo.gov.za/browse?office=HEALTH");
+  assert.ok(healthListing);
+  assert.match(healthListing.content, /^Available Positions/);
+  assert.doesNotMatch(healthListing.content, /Limpopo health department nurse vacancies/i);
+  assert.match(healthListing.content, /Professional Nurse/);
+  assert.match(healthListing.content, /Location: Polokwane/);
+  assert.match(healthListing.content, /30 October 2026/);
+  assert.ok(calls.includes("https://erecruitment.limpopo.gov.za/browse?office=HEALTH"));
+});
+
+test("community directory uses sourced names and clearly labels its 2026-10-05 snapshot", () => {
+  assert.ok(COMMUNITY_SOURCE_DIRECTORY.some(group => group.sources.some(source => source.url === "https://www.maruleng.gov.za/pages/vacancies.php")));
+  assert.ok(COMMUNITY_PLACE_RECORDS.some(record => record.name === "Moetladimo Branch" && record.checkedAt === "2026-10-05"));
+  assert.ok(COMMUNITY_PLACE_RECORDS.some(record => record.name === "SEKORORO clinic"));
+  assert.ok(COMMUNITY_PLACE_RECORDS.some(record => record.name === "Sekororo hospital"));
+  assert.ok(COMMUNITY_PLACE_RECORDS.find(record => record.name === "Moetladimo Branch").note.includes("not name a"));
+});
+
+test("response-language selection supports Sepedi, Tsonga and Venda as best-effort translations", () => {
+  assert.equal(normalizeResponseLanguage("sepedi"), "sepedi");
+  assert.equal(normalizeResponseLanguage("tsonga"), "xitsonga");
+  assert.equal(normalizeResponseLanguage("xitsonga"), "xitsonga");
+  assert.equal(normalizeResponseLanguage("venda"), "tshivenda");
+  assert.equal(normalizeResponseLanguage("tshivenda"), "tshivenda");
+  assert.equal(normalizeResponseLanguage("xhosa"), null);
+  assert.match(responseLanguageInstruction("sepedi"), /Write the answer in Sepedi/);
+  assert.match(responseLanguageInstruction("tsonga"), /best-effort machine-generated translation/);
+  assert.match(responseLanguageInstruction("tshivenda"), /not a certified translation/);
+});
+
+test("weather adapter uses the representative Ga-Sekororo point and exposes model-valid time", async () => {
+  const url = new URL(buildWeatherForecastUrl());
+  assert.equal(url.hostname, "api.open-meteo.com");
+  assert.equal(url.searchParams.get("latitude"), String(WEATHER_LOCATION.latitude));
+  assert.equal(url.searchParams.get("longitude"), String(WEATHER_LOCATION.longitude));
+  assert.equal(url.searchParams.get("timezone"), "Africa/Johannesburg");
+  assert.equal(shouldFetchSekororoWeather("Latest weather forecast for Ga-Sekororo"), true);
+  assert.equal(shouldFetchSekororoWeather("Weather tomorrow"), true);
+  assert.equal(shouldFetchSekororoWeather("Weather around Gqeberha"), false);
+  assert.equal(describeWeatherCode(95), "thunderstorm");
+
+  const retrievedAt = "2026-10-05T15:00:00.000Z";
+  const result = await fetchSekororoWeather({
+    now: new Date(retrievedAt),
+    fetcher: async () => new Response(JSON.stringify({
+      timezone: "Africa/Johannesburg", utc_offset_seconds: 7200,
+      current: { time: "2026-10-05T17:00", temperature_2m: 23.5, apparent_temperature: 24, relative_humidity_2m: 45, precipitation: 0, weather_code: 1, wind_speed_10m: 10 },
+      daily: { time: ["2026-10-05"], weather_code: [1], temperature_2m_min: [12], temperature_2m_max: [25], precipitation_sum: [0], precipitation_probability_max: [10], wind_speed_10m_max: [18] }
+    }), { headers: { "Content-Type": "application/json" } })
+  });
+  assert.equal(result.location, "Ga-Sekororo, Maruleng, Limpopo");
+  assert.equal(result.retrievedAt, retrievedAt);
+  assert.equal(result.validTime, "2026-10-05T17:00");
+  assert.equal(result.current.weatherDescription, "mainly clear");
+  assert.equal(result.daily[0].maximumC, 25);
 });
 
 test("developer questions return the exact structured profile only when explicitly requested", () => {
@@ -1241,7 +1309,7 @@ test("developer questions return the exact structured profile only when explicit
     fullName: "Tshepo Joseph Mailula",
     initialsMeaning: "TJ stands for Tshepo Joseph",
     role: "Developer, progressive programmer, and creator of TMJ AI Agent",
-    purpose: "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI support accessible for everyday questions and to support NWU students in understanding concepts and working with their own study materials. I hope to use AI and automation to make useful information and guidance easier to access.",
+    purpose: "I’m TJ Mailula, a developer and progressive programmer with a strong interest in practical automation. I created TMJ AI Agent to make helpful AI, reliable public information and practical guidance easier to access, especially for people in Sekororo and communities across Limpopo.",
     location: "Tzaneen, Limpopo, South Africa",
     email: "mailulajosep@gmail.com",
     phone: "0718452020",
@@ -1259,15 +1327,15 @@ test("developer questions return the exact structured profile only when explicit
   assert.ok(getDeveloperIdentityResponse("What is the developer's email?"));
   assert.ok(getDeveloperIdentityResponse("How can I contact the creator?"));
   assert.ok(getDeveloperIdentityResponse("Who is T.J. Mailula?"));
-  assert.match(getDeveloperIdentityResponse("Why did you develop TMJ AI Agent?").reply, /support NWU students/);
-  assert.match(getDeveloperIdentityResponse("What was the purpose of creating this app?").profile.purpose, /everyday questions/);
+  assert.match(getDeveloperIdentityResponse("Why did you develop TMJ AI Agent?").reply, /people in Sekororo and communities across Limpopo/);
+  assert.match(getDeveloperIdentityResponse("What was the purpose of creating this app?").profile.purpose, /Sekororo|Limpopo/);
   assert.equal(getDeveloperIdentityResponse("Why did you develop a study plan?"), null);
   assert.equal(getDeveloperIdentityResponse("What is the purpose of artificial intelligence?"), null);
   assert.equal(getDeveloperIdentityResponse("Explain academic integrity."), null);
-  assert.equal(getDeveloperIdentityReply("What are NWU's developer tools?"), null);
+  assert.equal(getDeveloperIdentityReply("What are a developer's tools?"), null);
 });
 
-test("developer chat returns the profile and does not call AI, embeddings, or NWU retrieval", async () => {
+test("developer chat returns the profile and does not call AI, embeddings, or public retrieval", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   const savedMessages = [];
@@ -1277,7 +1345,7 @@ test("developer chat returns the profile and does not call AI, embeddings, or NW
     const url = new URL(request.url);
     calls.push({ url, request });
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/conversations")) {
       return new Response(JSON.stringify({ id: "conversation-profile" }), { status: 201, headers: { "Content-Type": "application/json" } });
@@ -1309,9 +1377,9 @@ test("developer chat returns the profile and does not call AI, embeddings, or NW
     assert.match(payload.developerProfile.role, /progressive programmer/);
     assert.match(payload.developerProfile.purpose, /practical automation/);
     assert.deepEqual(payload.sources, []);
-    assert.equal(payload.nwuSearchUrl, null);
+    assert.equal(payload.communitySearchUrl, null);
     assert.equal(aiCalls, 0);
-    assert.equal(calls.some(call => call.url.pathname.includes("multisite-search") || call.url.pathname.includes("/rpc/")), false);
+    assert.equal(calls.some(call => call.url.pathname.includes("/rpc/")), false);
     assert.match(savedMessages[0][1].content, /mailulajosep@gmail\.com/);
     assert.match(savedMessages[0][1].content, /0718452020/);
   } finally {
@@ -1326,16 +1394,6 @@ test("assistant reply sanitizer removes unavailable-source notes and trailing so
   assert.equal(sanitizeAssistantReply("No sources available."), "I can help with that. Please add a little more detail to your question.");
 });
 
-test("NWU live search is reserved for explicit NWU requests and does not override an active upload chat", () => {
-  assert.equal(shouldSearchNwuLiveSources("What does this document say about assessment?", true), false);
-  assert.equal(shouldSearchNwuLiveSources("How do I plan my weekly budget?", false), false);
-  assert.equal(shouldSearchNwuLiveSources("What is today's date?", false), false, "the runtime date reference handles this without academic search");
-  assert.equal(shouldSearchNwuLiveSources("When does student registration open?", false), true);
-  assert.equal(shouldSearchNwuLiveSources("What date is my assignment due?", true), false, "an active upload chat stays scoped to its own evidence");
-  assert.equal(shouldSearchNwuLiveSources("Find the current NWU registration rule.", true), true);
-  assert.equal(shouldSearchNwuLiveSources("What is the official university exam timetable?", false), true);
-});
-
 test("conversation document migration removes the unscoped vector RPC and filters student uploads by chat", () => {
   const migration = readFileSync(new URL("../migrations/0003_conversation_scoped_documents.sql", import.meta.url), "utf8");
   assert.match(migration, /ADD COLUMN IF NOT EXISTS conversation_id uuid REFERENCES public\.conversations\(id\) ON DELETE CASCADE/i);
@@ -1345,12 +1403,17 @@ test("conversation document migration removes the unscoped vector RPC and filter
   assert.doesNotMatch(migration, /c\.user_id = auth\.uid\(\)\s+OR d\.source_type/i, "the old across-all-conversations retrieval predicate is removed");
 });
 
-test("conversation upload retrieval reserves most result slots for the active chat before adding official NWU results", () => {
-  const migration = readFileSync(new URL("../migrations/0004_prioritize_conversation_uploads.sql", import.meta.url), "utf8");
-  assert.match(migration, /d\.conversation_id = target_conversation_id/i);
-  assert.match(migration, /LIMIT LEAST\(match_count, 8\)/i);
-  assert.match(migration, /LIMIT GREATEST\(match_count - LEAST\(match_count, 8\), 0\)/i);
-  assert.match(migration, /ORDER BY CASE WHEN source_type = 'student_upload' THEN 0 ELSE 1 END/i);
+test("current Supabase search migration removes shared public sources and scopes vectors to the active conversation", () => {
+  const migration = readFileSync(new URL("../migrations/0006_conversation_only_vector_search.sql", import.meta.url), "utf8");
+  const schema = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
+  for (const sql of [migration, schema]) {
+    assert.match(sql, /d\.source_type = 'student_upload'\s+AND d\.conversation_id = target_conversation_id/is);
+    assert.match(sql, /LIMIT LEAST\(match_count, 8\)/i);
+    assert.doesNotMatch(sql, /official_matches|UNION ALL/i);
+    assert.doesNotMatch(sql, /nwu_official/i);
+  }
+  assert.match(migration, /CREATE POLICY "users manage own documents"[\s\S]*?USING \(auth\.uid\(\) = user_id\)/i);
+  assert.match(migration, /CREATE POLICY "users read own chunks"[\s\S]*?USING \(auth\.uid\(\) = user_id\)/i);
 });
 
 test("chat retrieval is limited to the active conversation and retains recent turns", async () => {
@@ -1364,13 +1427,13 @@ test("chat retrieval is limited to the active conversation and retains recent tu
   let modelMessages;
   let embeddingText;
   let aiCalls = 0;
-  const searchRequests = [];
+  const publicPageRequests = [];
   globalThis.fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.pathname.endsWith("/multisite-search")) searchRequests.push(url.href);
+    if (url.hostname.endsWith("gov.za")) publicPageRequests.push(url.href);
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/conversations") && request.method === "GET") {
       const owned = url.searchParams.get("id") === `eq.${conversationId}`;
@@ -1380,7 +1443,7 @@ test("chat retrieval is limited to the active conversation and retains recent tu
       rpcArguments = JSON.parse(await request.text());
       return new Response(JSON.stringify([
         { id: 1, content: "The study guide describes the stages of cellular respiration.", similarity: 0.11, source_name: "Biology-study-guide.pdf", source_type: "student_upload", source_url: "" },
-        { id: 2, content: "NWU policy describes module registration dates.", similarity: 0.92, source_name: "NWU Registration Policy", source_type: "nwu_official", source_url: "https://www.nwu.ac.za/registration" }
+        { id: 2, content: "This legacy global document must not enter a user's answer.", similarity: 0.92, source_name: "Legacy shared public reference", source_type: "legacy_public_resource", source_url: "https://example.org/legacy" }
       ]), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/documents") && request.method === "GET") {
@@ -1437,48 +1500,70 @@ test("chat retrieval is limited to the active conversation and retains recent tu
     }), env);
     assert.equal(foreignResponse.status, 404);
     assert.equal(aiCalls, beforeForeignConversation, "a conversation the user does not own never reaches retrieval or AI");
-    assert.equal(searchRequests.length, 0, "an uploaded-document follow-up does not retrieve unrelated live NWU pages");
+    assert.equal(publicPageRequests.length, 0, "an uploaded-document follow-up does not retrieve unrelated public pages");
+    assert.doesNotMatch(modelMessages.at(-1).content, /legacy global document|Legacy shared public reference/);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("protected NWU indexing rejects eFundi/private and external URLs before fetching", async () => {
-  const env = {
-    AI: { async run() { throw new Error("should not be called"); } },
-    USAGE_DB: { prepare() { throw new Error("invalid URLs must be rejected before usage access"); } },
-    SUPABASE_URL: "https://project.supabase.co",
-    SUPABASE_SERVICE_ROLE_KEY: "service-key",
-    NWU_INGEST_SECRET: "ingest-secret"
+test("community source directory route returns sourced records and rejects writes", async () => {
+  const response = await worker.fetch(new Request("https://example.test/api/community/sources"), {});
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.reviewedAt, "2026-10-05");
+  assert.ok(payload.groups.some(group => group.sources.some(source => source.url === "https://www.maruleng.gov.za/pages/vacancies.php")));
+  assert.ok(payload.places.some(place => place.name === "Moetladimo Branch"));
+  const write = await worker.fetch(new Request("https://example.test/api/community/sources", { method: "POST" }), {});
+  assert.equal(write.status, 405);
+});
+
+test("weather route returns Open-Meteo model and retrieval timestamps without authentication", async () => {
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async input => {
+    providerCalls += 1;
+    const url = new URL(String(input));
+    assert.equal(url.hostname, "api.open-meteo.com");
+    return new Response(JSON.stringify({
+      timezone: "Africa/Johannesburg", utc_offset_seconds: 7200,
+      current: { time: "2026-10-05T17:00", temperature_2m: 22, apparent_temperature: 22, relative_humidity_2m: 44, precipitation: 0, weather_code: 2, wind_speed_10m: 9 },
+      daily: { time: ["2026-10-05"], weather_code: [2], temperature_2m_min: [12], temperature_2m_max: [24], precipitation_sum: [0], precipitation_probability_max: [15], wind_speed_10m_max: [18] }
+    }), { headers: { "Content-Type": "application/json" } });
   };
-  for (const url of ["https://efundi.nwu.ac.za/course", "https://example.com/document.pdf"]) {
-    const response = await worker.fetch(new Request("https://example.test/api/index-nwu", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-tmj-ingest-secret": "ingest-secret" },
-      body: JSON.stringify({ url })
-    }), env);
-    assert.equal(response.status, 400);
-    assert.match((await response.json()).error, /public HTTPS URL on an NWU-owned host/);
+  try {
+    const response = await worker.fetch(new Request("https://example.test/api/weather"), {});
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.location, "Ga-Sekororo, Maruleng, Limpopo");
+    assert.ok(Number.isFinite(Date.parse(payload.retrievedAt)));
+    assert.equal(payload.validTime, "2026-10-05T17:00");
+    assert.equal(payload.current.weatherDescription, "partly cloudy");
+    assert.equal(payload.locationPoint.referenceUrl, "https://www.geonames.org/1002777");
+    const unsupported = await worker.fetch(new Request("https://example.test/api/weather", { method: "POST" }), {});
+    assert.equal(unsupported.status, 405);
+    assert.equal(providerCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
-
-test("chat returns live NWU citations when Supabase vector search is unavailable", async () => {
+test("chat returns live official Maruleng vacancy citations when vector search is unavailable", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   let chatInput;
   globalThis.fetch = async (input) => {
-    const url = new URL(typeof input === "string" ? input : input.url);
+    const rawUrl = input instanceof Request ? input.url : (typeof input === "string" ? input : input.href);
+    const url = new URL(rawUrl);
     calls.push(url.href);
     if (url.pathname.endsWith("/auth/v1/user")) {
-      return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
     }
-    if (url.pathname.endsWith("/multisite-search")) {
-      const html = `<div class="search-scr views-row"><h3 class="search-h3"><a href="https://www.nwu.ac.za/governance-and-management/academic-policies">NWU Academic Policies</a></h3><span class="date-src"><i>2026-09-30</i></span><span class="content">The Academic Integrity Policy describes academic honesty, attribution and plagiarism.</span></div>`;
-      return new Response(html, { headers: { "Content-Type": "text/html" } });
+    if (url.hostname === "www.maruleng.gov.za" && url.pathname.endsWith("/pages/vacancies.php")) {
+      return new Response("<html><title>Vacancies</title><main><h1>External Vacancies</h1><p>ADVERT TRAINEE TRAFFIC OFFICERS X5 AND FOREMAN LOCAL AUG 2026. Date uploaded: 2026-09-17. Closing date: 2026-10-07. Apply only as instructed in the linked official advert.</p></main></html>", { headers: { "Content-Type": "text/html" } });
     }
-    if (url.pathname.endsWith("/governance-and-management/academic-policies")) {
-      return new Response("<html><main><h1>NWU Academic Policies</h1><p>The current Academic Integrity Policy requires academic honesty, proper attribution and correct referencing. Students should consult the current study guide.</p></main></html>", { headers: { "Content-Type": "text/html" } });
+    if (/\.(?:gov\.za|limpopo\.gov\.za|maruleng\.gov\.za)$/.test(url.hostname) || url.hostname.endsWith("gov.za")) {
+      return new Response("Not found", { status: 404, headers: { "Content-Type": "text/plain" } });
     }
     if (url.pathname.endsWith("/rpc/match_document_chunks_cloudflare")) {
       return new Response(JSON.stringify({ code: "PGRST202", message: "Function not found in schema cache" }), { status: 404, headers: { "Content-Type": "application/json" } });
@@ -1496,7 +1581,7 @@ test("chat returns live NWU citations when Supabase vector search is unavailable
         async run(model, input) {
           if (model === "@cf/baai/bge-small-en-v1.5") return { data: [Array(384).fill(0.01)] };
           chatInput = input;
-          return { response: "Academic integrity requires honest work and correct attribution.\n\nSource notes: None (no uploaded material found)" };
+          return { response: "The Maruleng Local Municipality vacancies page lists an advert closing on 7 October 2026. Read the original advert before applying." };
         }
       },
       SUPABASE_URL: "https://test-project.supabase.co",
@@ -1506,18 +1591,21 @@ test("chat returns live NWU citations when Supabase vector search is unavailable
     const response = await worker.fetch(new Request("https://example.test/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
-      body: JSON.stringify({ message: "What does NWU publish about academic integrity?" })
+      body: JSON.stringify({ message: "Find current official job vacancies in Sekororo, Limpopo and tell me the closing date.", responseLanguage: "tshivenda" })
     }), env);
     assert.equal(response.status, 200);
     const payload = await response.json();
-    assert.match(payload.reply, /correct attribution/);
-    assert.doesNotMatch(payload.reply, /source notes|no sources available|no uploaded material found/i);
-    assert.ok(payload.sources.some(source => source.name === "NWU Academic Policies" && source.url.startsWith("https://www.nwu.ac.za/")));
-    assert.match(payload.nwuSearchUrl, /multisite-search/);
-    assert.match(chatInput.messages[1].content, /current Academic Integrity Policy/);
-    assert.match(chatInput.messages[1].content, /NWU search listing date 2026-09-30/);
-    assert.doesNotMatch(chatInput.messages[1].content, /NWU page date/);
+    assert.match(payload.reply, /7 October 2026/);
+    assert.ok(payload.sources.some(source => source.name === "Maruleng Local Municipality — Vacancies" && source.url === "https://www.maruleng.gov.za/pages/vacancies.php"));
+    assert.equal(payload.communitySearchUrl, "/community.html");
+    assert.ok(Number.isFinite(Date.parse(payload.sources.find(source => source.url.includes("maruleng.gov.za/pages/vacancies.php")).checkedAt)));
+    assert.match(chatInput.messages[0].content, /Write the answer in Tshivenda/);
+    assert.match(chatInput.messages.at(-1).content, /Closing date: 2026-10-07/);
+    assert.match(chatInput.messages.at(-1).content, /Retrieved by TMJ at:/);
+    assert.doesNotMatch(chatInput.messages.at(-1).content, /the user's full question or unique user phrase/i);
     assert.ok(calls.some(url => url.includes("match_document_chunks_cloudflare")), "the configured vector RPC was attempted");
+    assert.ok(calls.some(url => url === "https://www.maruleng.gov.za/pages/vacancies.php"));
+    assert.ok(calls.every(url => !url.includes("Find%20current%20official")), "the user query is not submitted as a website search string");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1532,7 +1620,7 @@ test("document indexing rejects an over-budget file and excessive extracted text
       const request = input instanceof Request ? input : new Request(input, init);
       const url = new URL(request.url);
       if (url.pathname.endsWith("/auth/v1/user")) {
-        return new Response(JSON.stringify({ id: "student-1", email: "student@nwu.ac.za", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ id: "student-1", email: "student@example.org", aud: "authenticated", role: "authenticated", app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" }), { headers: { "Content-Type": "application/json" } });
       }
       if (url.pathname.includes("/storage/v1/object/")) {
         return new Response(contents, { headers: { "Content-Type": "text/plain" } });

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7faf8">
+    <meta name="description" content="Weather and official public-information links for Sekororo, Tzaneen and Limpopo.">
+    <title>Local information | TMJ AI Agent</title>
+    <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="about-page-body community-page-body">
+    <main class="community-shell">
+      <header class="community-heading">
+        <p class="eyebrow">TMJ AI AGENT · COMMUNITY INFORMATION</p>
+        <h1>Local information</h1>
+        <p>Sekororo is in Maruleng Local Municipality, Mopani District, Limpopo. Official records also use Ga-Sekororo and refer to Ga-Mamahlola in the Metz/Moetladimo area. Mahlakung Shopping Centre is the documented project name; the South African Post Office record lists a Moetladimo Branch, not a branch named “Metz Post Office.”</p>
+      </header>
+
+      <section class="community-weather-card" aria-labelledby="weatherTitle">
+        <div class="community-section-heading">
+          <div>
+            <p class="eyebrow">LOCAL FORECAST</p>
+            <h2 id="weatherTitle">Weather around Ga-Sekororo</h2>
+          </div>
+          <button id="refreshWeather" class="community-refresh" type="button">Refresh</button>
+        </div>
+        <p id="weatherLocation" class="community-muted">Representative Ga-Sekororo locality point from <a href="https://www.geonames.org/1002777" target="_blank" rel="noopener noreferrer">GeoNames</a>; not a facility address or your phone's GPS. Forecast grid conditions may vary a few kilometres away.</p>
+        <p id="weatherStatus" class="community-status" role="status" aria-live="polite">Loading the latest forecast…</p>
+        <div id="weatherCurrent" class="weather-current" aria-live="polite"></div>
+        <div id="weatherDays" class="weather-days"></div>
+        <p class="community-footnote">This is a forecast-model snapshot, not a live observation at a weather station or a facility, and it may be edge-cached for up to 15 minutes. It is not an official severe-weather warning. Follow <a href="https://www.weathersa.co.za/" target="_blank" rel="noopener noreferrer">South African Weather Service forecasts and warnings</a> for safety alerts. Weather data by <a id="weatherProvider" href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo.com</a>, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>. Temperatures are rounded and summaries are derived from provider data.</p>
+      </section>
+
+      <section class="community-source-section" aria-labelledby="placesTitle">
+        <div class="community-section-heading">
+          <div>
+            <p class="eyebrow">SOURCED PLACE NAMES</p>
+            <h2 id="placesTitle">Local facilities and landmarks</h2>
+          </div>
+        </div>
+        <p class="community-muted">These records were checked on 5 October 2026. They are a dated source snapshot, not a live confirmation of opening hours or service availability. Exact street coordinates were not verified for these facilities.</p>
+        <div id="communityPlaces" class="community-place-list" aria-live="polite">
+          <p class="community-status">Loading sourced local place records…</p>
+        </div>
+      </section>
+
+      <section class="community-source-section" aria-labelledby="sourceTitle">
+        <div class="community-section-heading">
+          <div>
+            <p class="eyebrow">CHECK THE ORIGINAL NOTICE</p>
+            <h2 id="sourceTitle">Official information sources</h2>
+          </div>
+        </div>
+        <p class="community-muted">The links below are a curated directory, not a live alert feed. When you ask TMJ about a current local job, notice or project in chat, it fetches relevant official pages when available and reports the check time separately from any date shown by the source. Provincial jobs may be based in Polokwane or another town, not Sekororo; check the location in each advert. Government sites may be delayed, undated or incomplete, so verify deadlines and service status on the original page.</p>
+        <div id="communitySources" class="community-source-groups" aria-live="polite">
+          <p class="community-status">Loading official source links…</p>
+        </div>
+      </section>
+
+      <section class="community-chat-card" aria-labelledby="researchTitle">
+        <p class="eyebrow">ASK TMJ AI</p>
+        <h2 id="researchTitle">Need help researching something?</h2>
+        <p>Ask for a current Maruleng, Mopani, Limpopo or national vacancy, public notice, road or infrastructure update, or help understanding an official document. The assistant fetches relevant official source pages when asked; it is not a push-alert service. It should report when a source could not be verified rather than inventing a live update.</p>
+        <a class="community-chat-button" href="/">Back to chat</a>
+      </section>
+
+      <footer class="community-footer">
+        <a class="about-back-button" href="/" aria-label="Back to TMJ AI Agent chat"><span aria-hidden="true">←</span><span>Back to chat</span></a>
+        <a class="community-about-link" href="/about.html">About and privacy</a>
+      </footer>
+    </main>
+    <script src="/community.js" defer></script>
+  </body>
+</html>

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f7faf8">
-    <meta name="description" content="About TMJ AI Agent, its study-support focus, and how conversations and uploads are handled.">
+    <meta name="description" content="About TMJ AI Agent, its community-information focus, and how conversations, sources and uploads are handled.">
     <title>About | TMJ AI Agent</title>
     <link rel="icon" href="/tmj-mark.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/styles.css">
@@ -14,15 +14,18 @@
       <header class="about-page-heading">
         <p class="eyebrow">TMJ AI AGENT</p>
         <h1>About</h1>
-        <p>A helpful AI companion for everyday questions, with focused support for NWU students and their course material.</p>
+        <p>A general-purpose AI assistant for everyday questions, with a community focus on Sekororo, Tzaneen and Limpopo.</p>
       </header>
 
       <section class="about-page-card" aria-labelledby="aboutInfoTitle">
         <h2 id="aboutInfoTitle">About TMJ AI and your data</h2>
-        <p>TMJ AI Agent is an independent study companion, not an official North-West University service or endorsement. It complements eFundi and lecturer guidance; it does not replace them.</p>
+        <p>TMJ AI Agent is an independent general-purpose assistant. It can help explain topics, work with files, research public information and support the Sekororo community. It is not a government service and does not speak for any municipality, department or employer.</p>
         <p><strong>Conversations:</strong> Your signed-in questions and answers are saved to your account. You can delete a conversation and its messages from Recent conversations.</p>
         <p><strong>Uploads:</strong> Uploaded files and their indexed text stay with the conversation where they were added, so you can return to that chat and continue asking about them. Deleting that conversation also deletes its uploads and indexed text. Do not upload confidential, identifying, or sensitive material.</p>
-        <p><strong>Processing:</strong> Your question and relevant retrieved passages may be processed by Cloudflare Workers AI. Live NWU public search receives topic keywords from your question.</p>
+        <p><strong>AI processing:</strong> Your question and relevant retrieved passages may be processed by Cloudflare Workers AI to generate an answer.</p>
+        <p><strong>Public information:</strong> For a current local question, the Worker fetches relevant public official pages and keeps the question itself out of the outgoing page URLs and request parameters. The pages may still log ordinary request metadata. The source directory's facility contacts were checked on 5 October 2026 and are a dated snapshot, not live opening-hour or service confirmation. Do not include passwords, identity numbers or other sensitive personal details in a request for public-source research.</p>
+        <p><strong>Weather and location:</strong> The forecast uses one representative Ga-Sekororo locality point from <a href="https://www.geonames.org/1002777" target="_blank" rel="noopener noreferrer">GeoNames</a>, not your phone's GPS or a measured reading at a named facility. Open-Meteo numerical model data may be edge-cached for up to 15 minutes; the page shows when the provider response was retrieved and the model's valid time. This is not an official severe-weather warning. Follow <a href="https://www.weathersa.co.za/" target="_blank" rel="noopener noreferrer">South African Weather Service (SAWS)</a> for safety alerts. Data by <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>. Open-Meteo's free tier is for non-commercial use; an eligible commercial plan or another provider is needed before monetizing the app.</p>
+        <p><strong>Languages:</strong> AI-generated Sepedi, Tsonga (itsonga) and Tshivenda (Venda) text may contain mistakes. Check names, official terms and important employment, health or legal information with a fluent speaker or the cited official source.</p>
         <p><strong>Image creation:</strong> Image prompts are processed by Cloudflare Workers AI. The generated image appears in the current page and is not saved to TMJ conversation history; download it if you want to keep a copy.</p>
         <p><strong>Daily access:</strong> A minimal daily usage counter linked to your account helps share the pilot's free AI allowance fairly. It stores the UTC date, chat/upload counts and upload bytes, not question text or an AI-points balance. Access renews at 00:00 UTC (02:00 South African time).</p>
         <p><strong>Ratings:</strong> Helpful/not-helpful selections stay on this page and are not sent to TMJ in this version.</p>

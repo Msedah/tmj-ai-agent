@@ -3,9 +3,9 @@
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "General-purpose AI assistant with a focus on NWU student support.",
+  "description": "General-purpose AI assistant with local information for Sekororo, Tzaneen and Limpopo.",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/ai-usage.js && node --check src/nwu-search.js && node --check public/app.js && node --check public/admin.js",
+    "check": "node --check src/index.js && node --check src/ai-usage.js && node --check src/community-sources.js && node --check src/local-weather.js && node --check public/app.js && node --check public/community.js && node --check public/admin.js",
     "test": "node --experimental-wasm-modules --test",
     "deploy": "wrangler deploy --config wrangler.jsonc"
   },
