@@ -188,7 +188,9 @@ HELPFULNESS:
 - Use the trusted runtime date/time for "today," relative dates and calculations. Respect a requested timezone; otherwise use South African local time.
 - Explain clearly, adapt detail to the user's need, and ask a focused clarification only when necessary. Never claim to have checked a source unless retrieved evidence is provided.
 - For attached files, answer from the current conversation's retrieved passages first, then add useful general knowledge. If no passage is retrieved, do not claim to have read the file.
-- If the latest user message includes a response-language instruction, use that language. For Sepedi, Xitsonga or Tshivenda, preserve names, dates and numbers; if wording is uncertain, say so briefly rather than presenting a draft as certified translation.
+- Use English by default. If the user writes in another language or directly requests a translation, follow that request and preserve names, dates, numbers, URLs and official terms; never present machine translation as certified.
+- Make answers useful and specific: lead with the direct answer, organize multi-part requests with concise steps or bullets, and show key assumptions or a checkable calculation when helpful. Do not reveal private chain-of-thought.
+- For government-job questions, list only individual adverts supported by retrieved text. Give the exact official title and each available reference, location and closing date. Separate provincewide results from local ones, distinguish an official total count from verified advert details, and state when the source coverage is incomplete.
 - The application supplies the developer profile only when a user explicitly asks about the developer, creator or purpose. Do not volunteer it for unrelated questions.
 
 EVIDENCE AND ACCURACY:
@@ -197,31 +199,11 @@ EVIDENCE AND ACCURACY:
 - For current jobs, public notices, infrastructure or public-service information, prioritize retrieved official sources, cite their links in the answer UI, and distinguish (a) the time the page was fetched from (b) any date shown near an item. A page may contain archives; do not call an advert open if its deadline has passed relative to the trusted clock.
 - For provincial eRecruitment results, state the location printed in each advert and never present a provincewide post as being in Sekororo or nearby unless the advert names that locality. Department pages are a partial view; do not imply they are the complete Limpopo vacancy list.
 - Never invent vacancy deadlines, eligibility rules, local events, public projects, quotes, statistics or citations. If a deadline is absent, a source is undated, or an official page could not be fetched, say what could not be verified and link the original source when available. A tender award is not proof that construction is underway.
+- If current-source retrieval fails or returns only an index/count, do not claim that no opportunity exists; explain exactly what was and was not verified.
 - Weather supplied for Ga-Sekororo is a model forecast snapshot from Open-Meteo for a representative locality point, not a live weather-station observation or official severe-weather warning. State its valid time and follow the South African Weather Service for warnings.
 - Do not describe a user's upload as an official government document.
 - Do not add a source-list footer; the application renders clickable references separately.
 - Explain at the level the user needs and respect their stated goal.`;
-
-const RESPONSE_LANGUAGES = Object.freeze({
-  auto: "",
-  english: "English",
-  sepedi: "Sepedi",
-  xitsonga: "itsonga (Tsonga)",
-  tshivenda: "Tshivenda (Venda)"
-});
-const RESPONSE_LANGUAGE_ALIASES = Object.freeze({ tsonga: "xitsonga", venda: "tshivenda" });
-
-export function normalizeResponseLanguage(value) {
-  const requested = String(value ?? "auto").trim().toLowerCase();
-  const key = RESPONSE_LANGUAGE_ALIASES[requested] || requested;
-  return Object.hasOwn(RESPONSE_LANGUAGES, key) ? key : null;
-}
-
-export function responseLanguageInstruction(value) {
-  const language = normalizeResponseLanguage(value);
-  if (!language || language === "auto") return "Match the language used by the user when possible. Preserve names, dates, numbers, URLs and official terms accurately.";
-  return `Write the answer in ${RESPONSE_LANGUAGES[language]}. Use clear everyday wording. Preserve names, dates, numbers, URLs and official terms accurately. This is an experimental, best-effort machine-generated translation, not a certified translation; if a critical term is uncertain, say so briefly and do not present the wording as authoritative.`;
-}
 
 const CHAT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const EMBEDDING_MODEL = "@cf/baai/bge-small-en-v1.5";
@@ -334,6 +316,7 @@ async function recordDailyUserActivity(database, userId, now = new Date()) {
 }
 
 const DAILY_IMAGE_CLAIM_LEASE_MS = 15 * 60 * 1000;
+const DAILY_IMAGE_SUCCESS_LIMIT = 3;
 
 async function claimDailyImageUsage(database, userId, claimId, now = new Date()) {
   const timestamp = now.toISOString();
@@ -344,30 +327,38 @@ async function claimDailyImageUsage(database, userId, claimId, now = new Date())
     ON CONFLICT (user_id) DO UPDATE SET
       claim_id = excluded.claim_id,
       claimed_at = excluded.claimed_at
-    WHERE (daily_image_account_state.generated_at IS NULL
-        OR substr(daily_image_account_state.generated_at, 1, 10) < ?4)
+    WHERE (daily_image_account_state.generated_date IS NULL
+        OR daily_image_account_state.generated_date != ?4
+        OR daily_image_account_state.generated_count < ?6)
       AND (daily_image_account_state.claim_id IS NULL
         OR daily_image_account_state.claimed_at <= ?5)
     RETURNING user_id
-  `).bind(String(userId), String(claimId), timestamp, utcUsageDay(now), staleClaimBefore).first();
+  `).bind(String(userId), String(claimId), timestamp, utcUsageDay(now), staleClaimBefore, DAILY_IMAGE_SUCCESS_LIMIT).first();
   return { allowed: Boolean(row), resetAt: row ? null : nextUtcResetAt(now) };
 }
 
 async function markDailyImageGenerated(database, userId, claimId, requestedAt, generatedAt = new Date()) {
   const timestamp = generatedAt.toISOString();
+  const generatedDate = utcUsageDay(generatedAt);
   const row = await database.prepare(`
     UPDATE daily_image_account_state
-    SET claim_id = NULL, claimed_at = NULL, generated_at = ?3
+    SET claim_id = NULL, claimed_at = NULL, generated_at = ?3,
+        generated_count = CASE WHEN generated_date = ?4 THEN generated_count + 1 ELSE 1 END,
+        generated_date = ?4
     WHERE user_id = ?1 AND claim_id = ?2
-    RETURNING user_id
-  `).bind(String(userId), String(claimId), timestamp).first();
+    RETURNING user_id, generated_date, generated_count
+  `).bind(String(userId), String(claimId), timestamp, generatedDate).first();
   if (!row) throw new Error("Image-generation claim could not be completed.");
   try {
     await database.prepare(`
       INSERT INTO daily_image_usage (usage_date, user_id, claim_id, requested_at, generated_at)
       VALUES (?1, ?2, ?3, ?4, ?5)
-      ON CONFLICT (usage_date, user_id) DO NOTHING
-    `).bind(utcUsageDay(generatedAt), String(userId), String(claimId), requestedAt.toISOString(), timestamp).run();
+      ON CONFLICT (usage_date, user_id) DO UPDATE SET
+        claim_id = excluded.claim_id,
+        requested_at = excluded.requested_at,
+        generated_at = excluded.generated_at,
+        successful_count = daily_image_usage.successful_count + 1
+    `).bind(generatedDate, String(userId), String(claimId), requestedAt.toISOString(), timestamp).run();
   } catch {
     // The account-state row is authoritative for admin totals even if this optional daily event write fails.
   }
@@ -647,12 +638,12 @@ async function handleAdminDashboard(request, env) {
                UNION
                SELECT user_id FROM daily_usage WHERE usage_date = ?1
                UNION
-        SELECT user_id FROM daily_image_account_state WHERE substr(generated_at, 1, 10) = ?1
+        SELECT user_id FROM daily_image_account_state WHERE generated_date = ?1
              ) AS active_accounts) AS active_users,
              COALESCE((SELECT SUM(chat_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_chats,
              COALESCE((SELECT SUM(upload_count) FROM daily_usage WHERE usage_date = ?1), 0) AS total_uploads,
              COALESCE((SELECT SUM(upload_bytes) FROM daily_usage WHERE usage_date = ?1), 0) AS total_upload_bytes,
-             COALESCE((SELECT COUNT(*) FROM daily_image_account_state WHERE substr(generated_at, 1, 10) = ?1), 0) AS total_images,
+             COALESCE((SELECT SUM(generated_count) FROM daily_image_account_state WHERE generated_date = ?1), 0) AS total_images,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
                WHERE usage_date = ?1 AND budget_pool = 'shared'), 0) AS shared_ai_neurons_committed_milli,
              COALESCE((SELECT SUM(neurons_used_milli + neurons_reserved_milli) FROM daily_ai_neuron_usage
@@ -681,7 +672,7 @@ async function handleAdminDashboard(request, env) {
         UNION ALL
         SELECT image.user_id, image.generated_at AS first_seen_at, image.generated_at AS last_seen_at
         FROM daily_image_account_state AS image
-        WHERE substr(image.generated_at, 1, 10) = ?1
+        WHERE image.generated_date = ?1
           AND NOT EXISTS (
             SELECT 1 FROM daily_user_activity AS activity
             WHERE activity.activity_date = ?1 AND activity.user_id = image.user_id
@@ -698,8 +689,8 @@ async function handleAdminDashboard(request, env) {
              COALESCE(allocation.chat_limit, ?2) AS daily_chat_limit,
              COALESCE(ai_usage.neurons_used_milli, 0) AS ai_neurons_used_milli,
              COALESCE(ai_usage.neurons_reserved_milli, 0) AS ai_neurons_reserved_milli,
-             COALESCE((SELECT COUNT(*) FROM daily_image_account_state AS image
-               WHERE substr(image.generated_at, 1, 10) = ?1 AND image.user_id = activity.user_id), 0) AS image_count
+             COALESCE((SELECT generated_count FROM daily_image_account_state AS image
+               WHERE image.generated_date = ?1 AND image.user_id = activity.user_id), 0) AS image_count
       FROM active_accounts AS activity
       LEFT JOIN daily_usage AS usage
         ON usage.usage_date = ?1 AND usage.user_id = activity.user_id
@@ -810,8 +801,6 @@ async function handleChat(request, env) {
   try { body = await request.json(); } catch { return json(400, { error: "Invalid JSON" }); }
   const message = String(body.message || "").trim();
   if (!message || message.length > 8000) return json(400, { error: "Please provide a question under 8000 characters." });
-  const responseLanguage = normalizeResponseLanguage(body.responseLanguage);
-  if (!responseLanguage) return json(400, { error: "Choose a supported response language." });
 
   let conversationId = String(body.conversationId || "").trim() || null;
   if (conversationId) {
@@ -956,7 +945,7 @@ async function handleChat(request, env) {
   } else {
     try {
       reply = sanitizeAssistantReply(await generateChatResponse([
-        { role: "system", content: `${SYSTEM_PROMPT}\n\n${responseLanguageInstruction(responseLanguage)}` },
+        { role: "system", content: SYSTEM_PROMPT },
         ...priorTurns,
         { role: "user", content: prompt }
       ], env, { userId: auth.user.id }));
@@ -965,7 +954,11 @@ async function handleChat(request, env) {
         await releaseDailyChatUsage(env.USAGE_DB, auth.user.id, requestStartedAt);
         return dailyAiLimitResponse();
       }
-      return json(503, { error: "Cloudflare AI is temporarily unavailable. If the free daily allowance has been reached, try again after it resets." });
+      await releaseDailyChatUsage(env.USAGE_DB, auth.user.id, requestStartedAt);
+      return json(503, {
+        error: "TMJ AI could not complete this answer just now. The attempt was not added to the conversation; please retry shortly.",
+        code: "AI_SERVICE_UNAVAILABLE"
+      }, { "Retry-After": "5" });
     }
   }
 

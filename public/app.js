@@ -26,7 +26,6 @@ const chatStatus = $("chatStatus");
 const uploadStatus = $("uploadStatus");
 const attachmentControls = $("attachmentControls");
 const imageModeToggle = $("imageModeToggle");
-const responseLanguage = $("responseLanguage");
 const attachDocument = $("attachDocument");
 const documentFile = $("documentFile");
 const sendButton = $("sendButton");
@@ -152,7 +151,7 @@ function updateAuthUI() {
 }
 
 function renderWelcome() {
-  $("messages").innerHTML = '<div class="welcome"><img class="welcome-mark" src="/tmj-mark.svg" alt=""><p class="eyebrow">GENERAL AI · LOCAL INFORMATION</p><h2>What can I help with today?</h2><p>Ask about anything, explore local information, get a weather forecast, or choose a reply language.</p><div class="starter-prompts" role="group" aria-label="Try a starter prompt"><button class="starter-prompt" type="button" data-starter-prompt="What is the latest weather forecast for Ga-Sekororo, Limpopo? Use current forecast data and say when it was updated.">Weather in Ga-Sekororo</button><button class="starter-prompt" type="button" data-starter-prompt="Find official government job vacancies open to applicants in Limpopo. Include the official source and closing dates; do not guess if none can be verified.">Official Limpopo jobs</button><button class="starter-prompt" type="button" data-starter-prompt="Research recent official public notices or infrastructure and renovation updates affecting Sekororo, Metz, or nearby Tzaneen. Cite dated official sources and say if no current notice is available.">Local notices and projects</button><button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult topic in plain language and give one practical example.">Explain anything</button></div></div>';
+	$("messages").innerHTML = '<div class="welcome"><img class="welcome-mark" src="/tmj-mark.svg" alt=""><p class="eyebrow">GENERAL AI · LOCAL INFORMATION</p><h2>What can I help with today?</h2><p>Ask about anything, explore local information, or get a weather forecast.</p><div class="starter-prompts" role="group" aria-label="Try a starter prompt"><button class="starter-prompt" type="button" data-starter-prompt="What is the latest weather forecast for Ga-Sekororo, Limpopo? Use current forecast data and say when it was updated.">Weather in Ga-Sekororo</button><button class="starter-prompt" type="button" data-starter-prompt="Find official government job vacancies open to applicants in Limpopo. Include the official source and closing dates; do not guess if none can be verified.">Official Limpopo jobs</button><button class="starter-prompt" type="button" data-starter-prompt="Research recent official public notices or infrastructure and renovation updates affecting Sekororo, Metz, or nearby Tzaneen. Cite dated official sources and say if no current notice is available.">Local notices and projects</button><button class="starter-prompt" type="button" data-starter-prompt="Explain a difficult topic in plain language and give one practical example.">Explain anything</button></div></div>';
 }
 
 function safeHttpsUrl(value) {
@@ -605,7 +604,7 @@ async function readJson(response) {
   try {
     return await response.json();
   } catch {
-    return { error: `The server returned an unreadable response (${response.status}).` };
+    return { error: `The server returned an unreadable response (${response.status}).`, unreadable: true };
   }
 }
 
@@ -1031,24 +1030,32 @@ chatForm.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           message: prompt,
-          conversationId: currentConversation?.id || null,
-          responseLanguage: responseLanguage?.value || "auto"
+          conversationId: currentConversation?.id || null
         })
       });
       const data = await readJson(response);
       if (!response.ok) {
-        answer.textContent = data.error || `The request failed (${response.status}).`;
-        if (data.code === "DAILY_AI_NEURON_LIMIT_REACHED") {
-          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: data.resetAt });
-          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
-          setStatus(uploadStatus, DAILY_LIMIT_MESSAGE, "limit");
-        } else if (data.code === "DAILY_LIMIT_REACHED") {
-          applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: data.resetAt });
-          setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
-        } else if (data.code === "DAILY_USAGE_UNAVAILABLE") {
+        const temporaryChatFailure = data.code === "AI_SERVICE_UNAVAILABLE" || (data.unreadable && response.status >= 500);
+        if (temporaryChatFailure) {
+          answer.textContent = "TMJ AI could not complete this answer just now. Please retry shortly.";
           await refreshDailyUsage();
+          if (dailyUsage?.chatAllowed) {
+            setStatus(chatStatus, "The chat service is temporarily unavailable. Your question is still in the message box; please retry shortly.", "info");
+          }
         } else {
-          setStatus(chatStatus, "The answer could not be generated. Your question is still in the text box so you can retry.");
+          answer.textContent = data.error || `The request failed (${response.status}).`;
+          if (data.code === "DAILY_AI_NEURON_LIMIT_REACHED") {
+            applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: false, resetAt: data.resetAt });
+            setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+            setStatus(uploadStatus, DAILY_LIMIT_MESSAGE, "limit");
+          } else if (data.code === "DAILY_LIMIT_REACHED") {
+            applyDailyUsageStatus({ chatAllowed: false, uploadAllowed: dailyUsage?.uploadAllowed === true, resetAt: data.resetAt });
+            setStatus(chatStatus, DAILY_LIMIT_MESSAGE, "limit");
+          } else if (data.code === "DAILY_USAGE_UNAVAILABLE") {
+            await refreshDailyUsage();
+          } else {
+            setStatus(chatStatus, "The answer could not be generated. Your question is still in the text box so you can retry.");
+          }
         }
         userMessage.setAttribute("data-request-failed", "true");
         return;
