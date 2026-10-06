@@ -23,8 +23,6 @@ import worker, {
   MAX_DOCUMENT_CHUNKS,
   nextUtcResetAt,
   normalizeExtractedText,
-  normalizeResponseLanguage,
-  responseLanguageInstruction,
   sanitizeAssistantReply,
   utcUsageDay
 } from "../src/index.js";
@@ -49,12 +47,15 @@ import {
 import { COMMUNITY_PLACE_RECORDS, COMMUNITY_SOURCE_DIRECTORY, normalizeCommunityUrl, searchCommunitySources, shouldSearchCommunitySources } from "../src/community-sources.js";
 import { buildWeatherForecastUrl, describeWeatherCode, fetchSekororoWeather, shouldFetchSekororoWeather, WEATHER_LOCATION } from "../src/local-weather.js";
 
-function mockUsageDatabase(firstResult) {
+function mockUsageDatabase(firstResult, onRun = () => {}) {
   return {
     prepare(sql) {
       return {
         bind(...bindings) {
-          return { first: async () => typeof firstResult === "function" ? firstResult({ sql, bindings }) : firstResult };
+          return {
+            first: async () => typeof firstResult === "function" ? firstResult({ sql, bindings }) : firstResult,
+            run: async () => { onRun({ sql, bindings }); return { success: true }; }
+          };
         }
       };
     }
@@ -573,7 +574,7 @@ test("usage status requires authentication and returns eligibility without expos
   }
 });
 
-test("image API requires sign-in, meters one successful image, and hides the repeat allowance detail", async () => {
+test("image API requires sign-in, allows three successful images per UTC day, and hides the repeat allowance detail", async () => {
   const originalFetch = globalThis.fetch;
   const userId = "student-1";
   const imageClaims = new Map();
@@ -586,18 +587,20 @@ test("image API requires sign-in, meters one successful image, and hides the rep
           first: async () => {
             databaseCalls.push({ method: "first", sql, bindings });
             if (sql.includes("INSERT INTO daily_image_account_state")) {
-              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const [accountId, claimId, claimedAt, day, staleBefore, maxImages] = bindings;
               const previous = imageClaims.get(accountId);
-              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
-              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              const countToday = previous?.generatedDate === day ? previous.generatedCount : 0;
+              if (countToday >= maxImages || (previous?.claimId && previous.claimedAt > staleBefore)) return null;
+              imageClaims.set(accountId, { ...previous, claimId, claimedAt });
               return { user_id: accountId };
             }
             if (sql.includes("UPDATE daily_image_account_state")) {
-              const [accountId, claimId, generatedAt] = bindings;
+              const [accountId, claimId, generatedAt, generatedDate] = bindings;
               const current = imageClaims.get(accountId);
               if (current?.claimId !== claimId) return null;
-              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
-              return { user_id: accountId };
+              const generatedCount = current.generatedDate === generatedDate ? current.generatedCount + 1 : 1;
+              imageClaims.set(accountId, { ...current, claimId: null, claimedAt: null, generatedAt, generatedDate, generatedCount });
+              return { user_id: accountId, generatedDate, generatedCount };
             }
             if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
             throw new Error(`Unexpected D1 first query: ${sql}`);
@@ -634,18 +637,22 @@ test("image API requires sign-in, meters one successful image, and hides the rep
     assert.equal(unauthorized.status, 401);
     assert.equal(databaseCalls.length, 0, "unsigned requests do not touch the image ledger");
 
-    const generated = await worker.fetch(createRequest(), env);
-    const imagePayload = await generated.json();
-    assert.equal(generated.status, 200);
-    assert.equal(imagePayload.image, "/9j/2Q==");
-    assert.equal(imagePayload.contentType, "image/jpeg");
-    assert.equal(aiCalls, 1);
+    for (let count = 1; count <= 3; count += 1) {
+      const generated = await worker.fetch(createRequest(), env);
+      const imagePayload = await generated.json();
+      assert.equal(generated.status, 200);
+      assert.equal(imagePayload.image, "/9j/2Q==");
+      assert.equal(imagePayload.contentType, "image/jpeg");
+      assert.equal(imageClaims.get(userId).generatedCount, count);
+    }
+    assert.equal(aiCalls, 3);
     const imageLedgerInsert = databaseCalls.find(call => call.sql.includes("INSERT INTO daily_image_usage"));
     assert.ok(imageLedgerInsert);
-    assert.match(imageLedgerInsert.sql, /ON CONFLICT \(usage_date, user_id\) DO NOTHING/);
+    assert.match(imageLedgerInsert.sql, /ON CONFLICT \(usage_date, user_id\) DO UPDATE SET/);
+    assert.equal(databaseCalls.filter(call => call.sql.includes("INSERT INTO daily_image_usage")).length, 3);
     assert.equal(imageLedgerInsert.bindings[0], new Date().toISOString().slice(0, 10), "the event is recorded for the day generation actually completed");
     assert.equal(databaseCalls.find(call => call.sql.includes("INSERT INTO daily_ai_neuron_usage"))?.bindings[1], `${userId}#image`);
-    assert.ok(databaseCalls.some(call => call.sql.includes("UPDATE daily_image_account_state") && call.sql.includes("generated_at")));
+    assert.ok(databaseCalls.some(call => call.sql.includes("UPDATE daily_image_account_state") && call.sql.includes("generated_count")));
 
     const repeated = await worker.fetch(createRequest(), env);
     const repeatedPayload = await repeated.json();
@@ -653,13 +660,13 @@ test("image API requires sign-in, meters one successful image, and hides the rep
     assert.equal(repeatedPayload.code, "IMAGE_DAILY_LIMIT_REACHED");
     assert.equal(repeatedPayload.error, "Image generation is unavailable right now.");
     assert.doesNotMatch(repeatedPayload.error, /per day|today|tomorrow|quota|limit/i);
-    assert.equal(aiCalls, 1, "duplicate requests are rejected before a second inference");
+    assert.equal(aiCalls, 3, "a fourth request is rejected before inference after three successful images");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("an image finishing across UTC midnight consumes the completion day and blocks another request that day", async () => {
+test("images finishing across UTC midnight count on completion day and stop after three successes", async () => {
   const originalFetch = globalThis.fetch;
   const OriginalDate = globalThis.Date;
   let clock = new OriginalDate("2026-10-05T23:59:59.000Z");
@@ -669,6 +676,10 @@ test("an image finishing across UTC midnight consumes the completion day and blo
   }
   globalThis.Date = ControlledDate;
   const accountState = new Map();
+  accountState.set("midnight-user", {
+    claimId: null, claimedAt: null, generatedAt: "2026-10-05T23:40:00.000Z",
+    generatedDate: "2026-10-05", generatedCount: 2
+  });
   const imageEvents = [];
   let aiCalls = 0;
   const database = {
@@ -677,18 +688,20 @@ test("an image finishing across UTC midnight consumes the completion day and blo
         return {
           first: async () => {
             if (sql.includes("INSERT INTO daily_image_account_state")) {
-              const [userId, claimId, claimedAt, day, staleBefore] = bindings;
+              const [userId, claimId, claimedAt, day, staleBefore, maxImages] = bindings;
               const previous = accountState.get(userId);
-              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
-              accountState.set(userId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              const countToday = previous?.generatedDate === day ? previous.generatedCount : 0;
+              if (countToday >= maxImages || (previous?.claimId && previous.claimedAt > staleBefore)) return null;
+              accountState.set(userId, { ...previous, claimId, claimedAt });
               return { user_id: userId };
             }
             if (sql.includes("UPDATE daily_image_account_state")) {
-              const [userId, claimId, generatedAt] = bindings;
+              const [userId, claimId, generatedAt, generatedDate] = bindings;
               const current = accountState.get(userId);
               if (current?.claimId !== claimId) return null;
-              accountState.set(userId, { claimId: null, claimedAt: null, generatedAt });
-              return { user_id: userId };
+              const generatedCount = current.generatedDate === generatedDate ? current.generatedCount + 1 : 1;
+              accountState.set(userId, { ...current, claimId: null, claimedAt: null, generatedAt, generatedDate, generatedCount });
+              return { user_id: userId, generatedDate, generatedCount };
             }
             if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
             throw new Error(`Unexpected D1 query: ${sql}`);
@@ -724,10 +737,17 @@ test("an image finishing across UTC midnight consumes the completion day and blo
     const first = await worker.fetch(request(), env);
     assert.equal(first.status, 200);
     assert.equal(accountState.get("midnight-user").generatedAt, "2026-10-06T00:00:02.000Z");
+    assert.equal(accountState.get("midnight-user").generatedDate, "2026-10-06");
+    assert.equal(accountState.get("midnight-user").generatedCount, 1, "the success is counted on completion day, not the prior request day");
     assert.equal(imageEvents[0][0], "2026-10-06", "admin event reporting uses the actual completion day");
     const second = await worker.fetch(request(), env);
-    assert.equal(second.status, 429);
-    assert.equal(aiCalls, 1, "the account-wide completion lock prevents another inference on the same completion day");
+    const third = await worker.fetch(request(), env);
+    assert.equal(second.status, 200);
+    assert.equal(third.status, 200);
+    assert.equal(accountState.get("midnight-user").generatedCount, 3);
+    const fourth = await worker.fetch(request(), env);
+    assert.equal(fourth.status, 429);
+    assert.equal(aiCalls, 3, "the completion-day counter rejects a fourth inference");
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.Date = OriginalDate;
@@ -745,18 +765,20 @@ test("failed image inference releases its account claim so a later retry can suc
         return {
           first: async () => {
             if (sql.includes("INSERT INTO daily_image_account_state")) {
-              const [accountId, claimId, claimedAt, day, staleBefore] = bindings;
+              const [accountId, claimId, claimedAt, day, staleBefore, maxImages] = bindings;
               const previous = imageClaims.get(accountId);
-              if (previous && (previous.generatedAt?.slice(0, 10) >= day || (previous.claimId && previous.claimedAt > staleBefore))) return null;
-              imageClaims.set(accountId, { claimId, claimedAt, generatedAt: previous?.generatedAt || null });
+              const countToday = previous?.generatedDate === day ? previous.generatedCount : 0;
+              if (countToday >= maxImages || (previous?.claimId && previous.claimedAt > staleBefore)) return null;
+              imageClaims.set(accountId, { ...previous, claimId, claimedAt });
               return { user_id: accountId };
             }
             if (sql.includes("UPDATE daily_image_account_state")) {
-              const [accountId, claimId, generatedAt] = bindings;
+              const [accountId, claimId, generatedAt, generatedDate] = bindings;
               const current = imageClaims.get(accountId);
               if (current?.claimId !== claimId) return null;
-              imageClaims.set(accountId, { claimId: null, claimedAt: null, generatedAt });
-              return { user_id: accountId };
+              const generatedCount = current.generatedDate === generatedDate ? current.generatedCount + 1 : 1;
+              imageClaims.set(accountId, { ...current, claimId: null, claimedAt: null, generatedAt, generatedDate, generatedCount });
+              return { user_id: accountId, generatedDate, generatedCount };
             }
             if (sql.includes("daily_ai_neuron_usage")) return { user_id: bindings[1] };
             throw new Error(`Unexpected D1 query: ${sql}`);
@@ -1263,18 +1285,6 @@ test("community directory uses sourced names and clearly labels its 2026-10-05 s
   assert.ok(COMMUNITY_PLACE_RECORDS.find(record => record.name === "Moetladimo Branch").note.includes("not name a"));
 });
 
-test("response-language selection supports Sepedi, Tsonga and Venda as best-effort translations", () => {
-  assert.equal(normalizeResponseLanguage("sepedi"), "sepedi");
-  assert.equal(normalizeResponseLanguage("tsonga"), "xitsonga");
-  assert.equal(normalizeResponseLanguage("xitsonga"), "xitsonga");
-  assert.equal(normalizeResponseLanguage("venda"), "tshivenda");
-  assert.equal(normalizeResponseLanguage("tshivenda"), "tshivenda");
-  assert.equal(normalizeResponseLanguage("xhosa"), null);
-  assert.match(responseLanguageInstruction("sepedi"), /Write the answer in Sepedi/);
-  assert.match(responseLanguageInstruction("tsonga"), /best-effort machine-generated translation/);
-  assert.match(responseLanguageInstruction("tshivenda"), /not a certified translation/);
-});
-
 test("weather adapter uses the representative Ga-Sekororo point and exposes model-valid time", async () => {
   const url = new URL(buildWeatherForecastUrl());
   assert.equal(url.hostname, "api.open-meteo.com");
@@ -1551,7 +1561,9 @@ test("weather route returns Open-Meteo model and retrieval timestamps without au
 test("chat returns live official Maruleng vacancy citations when vector search is unavailable", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
+  const usageOperations = [];
   let chatInput;
+  let failNextChatInference = true;
   globalThis.fetch = async (input) => {
     const rawUrl = input instanceof Request ? input.url : (typeof input === "string" ? input : input.href);
     const url = new URL(rawUrl);
@@ -1581,25 +1593,41 @@ test("chat returns live official Maruleng vacancy citations when vector search i
         async run(model, input) {
           if (model === "@cf/baai/bge-small-en-v1.5") return { data: [Array(384).fill(0.01)] };
           chatInput = input;
+          if (failNextChatInference) {
+            failNextChatInference = false;
+            throw new Error("temporary upstream AI failure");
+          }
           return { response: "The Maruleng Local Municipality vacancies page lists an advert closing on 7 October 2026. Read the original advert before applying." };
         }
       },
       SUPABASE_URL: "https://test-project.supabase.co",
       SUPABASE_ANON_KEY: "test-anon-key",
-      USAGE_DB: mockUsageDatabase({ chat_count: 1, upload_count: 0 })
+      USAGE_DB: mockUsageDatabase({ chat_count: 1, upload_count: 0 }, operation => usageOperations.push(operation))
     };
-    const response = await worker.fetch(new Request("https://example.test/api/chat", {
+    const request = () => new Request("https://example.test/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer user-token" },
+      // Ignore this legacy field from a cached client; the server now uses English by default.
       body: JSON.stringify({ message: "Find current official job vacancies in Sekororo, Limpopo and tell me the closing date.", responseLanguage: "tshivenda" })
-    }), env);
+    });
+    const failedResponse = await worker.fetch(request(), env);
+    assert.equal(failedResponse.status, 503);
+    assert.equal((await failedResponse.json()).code, "AI_SERVICE_UNAVAILABLE");
+    assert.equal(failedResponse.headers.get("Retry-After"), "5");
+    assert.equal(usageOperations.filter(operation => /SET chat_count = chat_count - 1/.test(operation.sql)).length, 1,
+      "a failed inference refunds its daily chat count so the user can retry");
+
+    const response = await worker.fetch(request(), env);
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.match(payload.reply, /7 October 2026/);
     assert.ok(payload.sources.some(source => source.name === "Maruleng Local Municipality — Vacancies" && source.url === "https://www.maruleng.gov.za/pages/vacancies.php"));
     assert.equal(payload.communitySearchUrl, "/community.html");
     assert.ok(Number.isFinite(Date.parse(payload.sources.find(source => source.url.includes("maruleng.gov.za/pages/vacancies.php")).checkedAt)));
-    assert.match(chatInput.messages[0].content, /Write the answer in Tshivenda/);
+    assert.match(chatInput.messages[0].content, /Use English by default/i);
+    assert.match(chatInput.messages[0].content, /directly requests a translation/i);
+    assert.match(chatInput.messages[0].content, /For government-job questions, list only individual adverts supported by retrieved text/i);
+    assert.doesNotMatch(chatInput.messages[0].content, /Write the answer in Tshivenda/i);
     assert.match(chatInput.messages.at(-1).content, /Closing date: 2026-10-07/);
     assert.match(chatInput.messages.at(-1).content, /Retrieved by TMJ at:/);
     assert.doesNotMatch(chatInput.messages.at(-1).content, /the user's full question or unique user phrase/i);

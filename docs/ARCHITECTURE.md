@@ -14,7 +14,7 @@ The `/community.html` page provides a curated official-source directory and date
 
 The Ga-Sekororo weather route retrieves Open-Meteo numerical model data for a representative GeoNames locality point. It is not a weather-station reading, device GPS location or official warning. The response reports provider-retrieval time and model-valid time. Follow SAWS for official severe-weather warnings. Open-Meteo's free tier is non-commercial; an eligible commercial plan or another provider is required before monetizing this feature.
 
-Reply-language selection supports Sepedi, Xitsonga/Tsonga and Tshivenda/Venda as best-effort machine translation, not certified translation.
+The chat interface defaults to English and has no reply-language picker; the model follows a direct translation request in the user's message when possible.
 
 ## Authentication and privacy
 

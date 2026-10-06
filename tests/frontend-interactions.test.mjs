@@ -51,10 +51,10 @@ test("document attachment is inside the message composer and developer contact i
   assert.match(aboutMarkup, /<a class="about-back-button" href="\/" data-about-back[^>]*>[\s\S]*?<span>Back<\/span>/);
   assert.match(aboutMarkup, /independent general-purpose assistant/i);
   assert.match(markup, /General AI help, with a focus on Sekororo and Limpopo/);
-  assert.match(markup, /id="responseLanguage"/);
-  assert.match(markup, /value="sepedi"/);
-  assert.match(markup, /value="xitsonga"/);
-  assert.match(markup, /value="tshivenda"/);
+  assert.doesNotMatch(markup, /responseLanguage|response-language-control|Sepedi|Tsonga|Tshivenda|Reply in/i);
+  assert.doesNotMatch(source, /responseLanguage/);
+  assert.doesNotMatch(aboutMarkup, /Sepedi|Tsonga|Tshivenda|<strong>Languages:/i);
+  assert.doesNotMatch(styles, /response-language-control/);
   assert.match(aboutMarkup, /Deleting that conversation also deletes its uploads and indexed text/i);
   assert.match(aboutMarkup, /stay with the conversation where they were added/i);
   assert.match(aboutMarkup, /Cloudflare Workers AI/);
@@ -184,6 +184,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   let savedDocuments = [];
   let indexedDocuments = 0;
   let imageRequests = 0;
+  let failNextChat503 = false;
   let usageSnapshot = { chatAllowed: true, uploadAllowed: true };
   let rejectNextIndex = false;
   let failUsageCheck = false;
@@ -292,6 +293,10 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
     }
     if (url === "/api/chat") {
       const question = JSON.parse(options.body || "{}").message || "";
+      if (failNextChat503) {
+        failNextChat503 = false;
+        return { ok: false, status: 503, json: async () => { throw new SyntaxError("upstream returned HTML instead of JSON"); } };
+      }
       if (/developer|creator|created|developed/i.test(question)) return {
         ok: true,
         status: 200,
@@ -554,6 +559,16 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   windowListeners.get("focus")[0]();
   await new Promise(resolve => setImmediate(resolve));
 
+  const failedPrompt = "Retry this after a temporary chat outage.";
+  failNextChat503 = true;
+  elements.prompt.value = failedPrompt;
+  await elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
+  const failedAnswer = elements.messages.children.at(-1);
+  assert.match(failedAnswer.textContent, /could not complete this answer just now/i);
+  assert.doesNotMatch(failedAnswer.textContent, /unreadable response/i);
+  assert.equal(elements.prompt.value, failedPrompt, "an unreadable 503 never clears the message draft");
+  assert.match(elements.chatStatus.textContent, /temporarily unavailable.*still in the message box.*retry/i);
+
   elements.prompt.value = "Find a current Maruleng public vacancy and include its closing date.";
   const sendPromise = elements.chatForm.listeners.get("submit")[0]({ preventDefault() {} });
   assert.equal(elements.sendButton.getAttribute("aria-busy"), "true", "send immediately exposes its in-progress state");
@@ -564,6 +579,7 @@ test("classic frontend boots; auth, history, composer uploads and citations resp
   assert.ok(chatCall, "academic question reaches the Worker");
   assert.match(chatCall.options.headers.Authorization, /^Bearer test-token$/);
   assert.equal(JSON.parse(chatCall.options.body).conversationId, "conversation-uploads", "questions after upload target the conversation that owns the files");
+  assert.equal(Object.hasOwn(JSON.parse(chatCall.options.body), "responseLanguage"), false, "chat API requests do not expose a response-language preference");
   const assistant = elements.messages.children.at(-1);
   assert.match(assistant.textContent, /vacancy page lists an advert closing on 7 October 2026/);
   assert.equal(assistant.children.length, 2, "citations and accessible answer actions are separate from the AI answer text");

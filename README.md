@@ -6,7 +6,7 @@ TMJ AI Agent is a general-purpose AI assistant with a community-information focu
 
 - Email/password authentication through Supabase Auth; email is the account label and is shortened in the sidebar when long.
 - User-scoped saved conversations and private document uploads.
-- General-purpose AI chat, with conversation-scoped document retrieval and optional reply-language selection for Sepedi, Tsonga (itsonga) and Venda (Tshivenda). Machine translation is best-effort, not certified.
+- General-purpose AI chat, with conversation-scoped document retrieval. English is the default; users can request a translation directly in their message.
 - On-request public-source retrieval for relevant official vacancies, notices, municipal pages, services, tenders and public-works information. Results are linked and the fetch time is reported separately from dates shown near a listing.
 - Curated community directory with official-source links and a dated snapshot of verified local place names and contacts.
 - Ga-Sekororo forecast model snapshot from Open-Meteo, including provider retrieval time and model-valid time. It uses a representative locality point, not the device's GPS or a measurement at a named facility.
@@ -104,5 +104,5 @@ After applying the Supabase schema and setting Worker variables:
 2. Open `/api/community/sources`; confirm the groups, official links and dated place records load.
 3. Open `/api/weather`; confirm provider data, `retrievedAt`, `validTime`, and the representative location point are present.
 4. Sign in and ask for a current local vacancy or public notice. Confirm citations open official domains, check times are separate from source dates, and expired/undated records are not described as open/current.
-5. Select Sepedi, Tsonga or Venda, ask a short test question, and check that names/dates remain intact; treat output as an unverified AI draft.
+5. Ask a few general and current-information questions; verify official titles, locations and dates against the linked source pages.
 6. Test document upload, image creation, and the chat interface at desktop and mobile widths; check the browser console for runtime errors.
